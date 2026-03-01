@@ -28,6 +28,9 @@ export const providerApi = {
        get_providers_with_models:():Promise<ApiResponse<any>> => {
             return request.get(`/api/v1/providers_with_models`);
         },
+       get_providers_filtered:(type: 'all' | 'builtin' | 'custom' = 'all'):Promise<ApiResponse<any>> => {
+            return request.get(`/api/v1/providers/filter`, { params: { type } });
+        },
        get_builtin_providers_with_models:():Promise<ApiResponse<any>> => {
             return request.get(`/api/v1/builtin/providers_with_models`);
         },

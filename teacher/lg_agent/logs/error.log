@@ -1,0 +1,4 @@
+2025-04-08 12:21:48.648 | ERROR    | app.lg_agent.lg_builder:create_research_plan:342 - 知识图谱查询失败: 'CONTAINS'
+2025-04-13 12:20:57.972 | ERROR    | app.lg_agent.lg_builder:create_research_plan:198 - failed to get Neo4j graph database connection: Could not connect to Neo4j database. Please ensure that the url is correct
+2025-04-13 12:34:05.441 | ERROR    | app.lg_agent.lg_builder:create_research_plan:198 - failed to get Neo4j graph database connection: Could not use APOC procedures. Please ensure the APOC plugin is installed in Neo4j and that 'apoc.meta.data()' is allowed in Neo4j configuration 
+2025-04-13 12:36:28.685 | ERROR    | app.lg_agent.lg_builder:create_research_plan:198 - failed to get Neo4j graph database connection: Could not use APOC procedures. Please ensure the APOC plugin is installed in Neo4j and that 'apoc.meta.data()' is allowed in Neo4j configuration 

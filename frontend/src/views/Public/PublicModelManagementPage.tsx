@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useLayoutEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icons } from '../../components/common/Icons';
 import { ProviderConfig, CustomModel } from '../../types';
@@ -8,13 +8,24 @@ import { Toast } from '../../components/common/Toast';
 import { providerApi, modelApi } from '../../api/modules/model';
 import { ModelProviderCreate, ModelProviderUpdate, ModelConfigDelete, ModelProviderDelete, ModelConfigCreate, ModelConfigUpdate, ProviderApiKeyVerify } from '../../api/types';
 import { MODEL_TYPE_CATEGORIES, SUPPORTED_MODEL_TYPES, MODEL_CONFIG_TYPES, MODEL_FEATURES, FEATURE_COLORS } from '../../constants/models';
-import { getProviderIconPath, getModelIconPath } from '../../utils/iconMap';
-// ==================== 常量定义 ====================
-
-
+import { getProviderIconPath, getModelIconPath, isDarkInvert } from '../../utils/iconMap';
 
 const PublicModelManagementPage: React.FC = () => {
   const navigate = useNavigate();
+
+  // ==================== Theme Initialization ====================
+  const [isDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme_public');
+    return saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  });
+
+  useLayoutEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
 
   // ==================== 核心数据状态 ====================
   const [apiProviders, setApiProviders] = useState<any[]>([]);
@@ -126,15 +137,28 @@ const PublicModelManagementPage: React.FC = () => {
         if (res.success === true && Array.isArray(res.data)) {
           setApiProviders(res.data);
 
-          // 初始化启用的模型列表
-          if (!localStorage.getItem('user_enabled_models')) {
-            const enabledFromApi = res.data.flatMap((p: any) =>
-              (p.models || []).filter((m: any) => m.is_enabled !== false).map((m: any) => m.model_name)
-            );
-            if (enabledFromApi.length > 0) {
-              setEnabledModels(enabledFromApi);
-            }
-          }
+          // Sync backend config existence to local state
+          setProviderConfigs(prev => {
+              const next = { ...prev };
+              let changed = false;
+              res.data.forEach((p: any) => {
+                  if (p.api_key && (!next[p.name]?.apiKey)) {
+                      next[p.name] = { 
+                          ...next[p.name], 
+                          apiKey: 'CONFIGURED_IN_BACKEND', 
+                          enabled: true 
+                      };
+                      changed = true;
+                  }
+              });
+              return changed ? next : prev;
+          });
+
+          // 始终从 API 同步启用状态 (因为后端已经处理了用户偏好持久化)
+          const enabledFromApi = res.data.flatMap((p: any) =>
+            (p.models || []).filter((m: any) => m.is_enabled === true).map((m: any) => m.model_name)
+          );
+          setEnabledModels(enabledFromApi);
 
           // 设置默认选中的供应商
           if (res.data.length > 0 && !selectedProviderId) {
@@ -271,7 +295,7 @@ const PublicModelManagementPage: React.FC = () => {
     return features.map(f => {
       if (f === 'structured') return 'structured_output';
       if (f === 'tools') return 'tool_call';
-      if (f === 'reasoning') return 'agent_thought';
+      if (f === 'thinking') return 'agent_thought';
       if (f === 'vision') return 'image_input';
       return f;
     });
@@ -476,8 +500,9 @@ const PublicModelManagementPage: React.FC = () => {
       name: modelForm.id,
       description: modelForm.description || 'Custom Model Configuration',
       provider: selectedProviderId as any,
-      supportsThinking: modelForm.features.includes('thinking') || modelForm.features.includes('reasoning'),
+      supportsThinking: modelForm.features.includes('thinking'),
       supportsVision: modelForm.features.includes('vision') || modelForm.type.includes('Multimodal'),
+      supportsToolCall: modelForm.features.includes('tool_call'),
       contextWindow: modelForm.contextWindow.toString() + (modelForm.contextWindow > 1000 ? 'K' : ''),
       isCustom: true
     };
@@ -779,8 +804,9 @@ const PublicModelManagementPage: React.FC = () => {
                   id: modelForm.id,
                   name: modelForm.label || modelForm.id,
                   description: modelForm.description,
-                  supportsThinking: modelForm.features.includes('thinking') || modelForm.features.includes('reasoning'),
+                  supportsThinking: modelForm.features.includes('thinking'),
                   supportsVision: modelForm.features.includes('vision') || modelForm.type.includes('Multimodal'),
+                  supportsToolCall: modelForm.features.includes('tool_call'),
                   contextWindow: modelForm.contextWindow.toString() + (modelForm.contextWindow > 1000 ? 'K' : ''),
                 } 
               : m
@@ -819,7 +845,7 @@ const PublicModelManagementPage: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-rice-paper text-tcm-charcoal transition-colors duration-500 overflow-hidden font-sans">
+    <div className="flex h-screen bg-rice-paper dark:bg-black text-tcm-charcoal dark:text-gray-200 transition-colors duration-500 overflow-hidden font-sans">
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && deleteTarget && (
         <DeleteConfirmToast
@@ -834,7 +860,7 @@ const PublicModelManagementPage: React.FC = () => {
       )}
 
       {/* 1. Sidebar - Provider List */}
-      <aside className="w-72 bg-[#f9fafb] dark:bg-[#181818] border-r border-gray-200 dark:border-gray-800 flex flex-col flex-shrink-0 z-20">
+      <aside className="w-72 bg-[#f9fafb] dark:bg-black border-r border-gray-200 dark:border-white/5 flex flex-col flex-shrink-0 z-20">
         <div className="p-4 pt-6">
           <div className="flex items-center gap-2 mb-6 cursor-pointer" onClick={() => navigate('/public')}>
             <button className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-lg transition-colors text-gray-500">
@@ -872,6 +898,7 @@ const PublicModelManagementPage: React.FC = () => {
             const isEnabled = config?.enabled && !!config?.apiKey;
             const isActive = selectedProviderId === provider.id;
             const providerIcon = getProviderIconPath(provider.name);
+            const shouldInvert = isDarkInvert(provider.name);
 
             return (
               <button
@@ -879,13 +906,19 @@ const PublicModelManagementPage: React.FC = () => {
                 onClick={() => setSelectedProviderId(provider.id)}
                 className={`w-full flex items-center justify-between p-3 rounded-xl transition-all group ${
                   isActive 
-                    ? 'bg-white dark:bg-[#252525] shadow-sm border border-gray-100 dark:border-gray-700' 
+                    ? 'bg-white dark:bg-[#151515] shadow-sm border border-gray-100 dark:border-white/10' 
                     : 'hover:bg-gray-100 dark:hover:bg-white/5 border border-transparent'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <span className="text-xl bg-gray-100 dark:bg-white/10 w-8 h-8 flex items-center justify-center rounded-lg">
-                    {providerIcon ? <img src={providerIcon} alt={provider.name} className="w-5 h-5" /> : provider.icon}
+                    {providerIcon ? (
+                        <img 
+                            src={providerIcon} 
+                            alt={provider.name} 
+                            className={`w-5 h-5 ${shouldInvert ? 'dark:invert dark:brightness-0 dark:invert-1' : 'dark:brightness-150 dark:contrast-150'}`} 
+                        />
+                    ) : provider.icon}
                   </span>
                   <span className={`text-sm font-medium ${isActive ? 'text-tcm-darkGreen dark:text-tcm-lightGreen font-bold' : 'text-gray-700 dark:text-gray-300'}`}>
                     {provider.name}
@@ -899,14 +932,18 @@ const PublicModelManagementPage: React.FC = () => {
       </aside>
 
       {/* 2. Main Content - Settings & Model List */}
-      <main className="flex-1 overflow-y-auto bg-rice-paper p-4 md:p-8 scroll-smooth">
+      <main className="flex-1 overflow-y-auto bg-rice-paper dark:bg-black p-4 md:p-8 scroll-smooth">
         <div className="max-w-4xl mx-auto space-y-6">
           
           {/* Header */}
           <div className="flex items-center gap-3 mb-6">
              <div className="text-3xl">
                 {currentProvider?.name && getProviderIconPath(currentProvider.name) ? (
-                    <img src={getProviderIconPath(currentProvider.name)} alt={currentProvider.name} className="w-8 h-8" />
+                    <img 
+                        src={getProviderIconPath(currentProvider.name)} 
+                        alt={currentProvider.name} 
+                        className={`w-8 h-8 ${isDarkInvert(currentProvider.name) ? 'dark:invert dark:brightness-0 dark:invert-1' : 'dark:brightness-150 dark:contrast-150'}`} 
+                    />
                 ) : (
                     currentProvider?.icon
                 )}
@@ -954,7 +991,7 @@ const PublicModelManagementPage: React.FC = () => {
           </div>
 
           {/* Card 1: Provider Configuration */}
-          <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
+          <div className="bg-white dark:bg-[#0a0a0a] rounded-2xl border border-gray-200 dark:border-white/5 p-6 shadow-sm">
              <div className="grid gap-6">
                 
                 {/* API Key */}
@@ -1045,7 +1082,7 @@ const PublicModelManagementPage: React.FC = () => {
           </div>
 
           {/* Card 2: Model List */}
-          <div className="bg-white dark:bg-[#1e1e1e] rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col min-h-[400px]">
+          <div className="bg-white dark:bg-[#0a0a0a] rounded-2xl border border-gray-200 dark:border-white/5 shadow-sm flex flex-col min-h-[400px]">
 
              {/* Toolbar */}
              <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex flex-wrap gap-4 items-center justify-between bg-gray-50/50 dark:bg-black/10 rounded-t-2xl">
@@ -1120,9 +1157,9 @@ const PublicModelManagementPage: React.FC = () => {
                       <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-white/10 flex items-center justify-center text-xl flex-shrink-0 text-gray-600 dark:text-gray-300">
                          {(() => {
                              const modelIcon = getModelIconPath(model.name);
-                             if (modelIcon) return <img src={modelIcon} alt={model.name} className="w-6 h-6" />;
+                             if (modelIcon) return <img src={modelIcon} alt={model.name} className={`w-6 h-6 ${isDarkInvert(model.name) ? 'dark:invert dark:brightness-0 dark:invert-1' : 'dark:brightness-150 dark:contrast-150'}`} />;
                              const providerIcon = getProviderIconPath(selectedProviderId);
-                             if (providerIcon) return <img src={providerIcon} alt={selectedProviderId} className="w-6 h-6" />;
+                             if (providerIcon) return <img src={providerIcon} alt={selectedProviderId} className={`w-6 h-6 ${isDarkInvert(selectedProviderId) ? 'dark:invert dark:brightness-0 dark:invert-1' : 'dark:brightness-150 dark:contrast-150'}`} />;
                              
                              return selectedProviderId === 'google' ? <Icons.Zap size={20}/> :
                                     selectedProviderId === 'openai' ? <Icons.BrainCircuit size={20}/> :
@@ -1162,7 +1199,7 @@ const PublicModelManagementPage: React.FC = () => {
                       {/* Context Window & Features Icons */}
                       <div className="hidden md:flex gap-2 items-center">
                          {model.supportsVision && <span className="p-1 rounded bg-blue-50 dark:bg-blue-900/20 text-blue-500" title="Vision"><Icons.Image size={14}/></span>}
-                         {model.supportsThinking && <span className="p-1 rounded bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500" title="Reasoning"><Icons.BrainCircuit size={14}/></span>}
+                         {model.supportsThinking && <span className="p-1 rounded bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500" title="Thinking"><Icons.BrainCircuit size={14}/></span>}
                          {model.contextWindow && <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 text-[10px] font-mono">{model.contextWindow}</span>}
                       </div>
 
@@ -1174,7 +1211,7 @@ const PublicModelManagementPage: React.FC = () => {
                               enabledModels.includes(model.id) ? 'bg-tcm-lightGreen' : 'bg-gray-200 dark:bg-gray-700'
                             }`}
                          >
-                            <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${enabledModels.includes(model.id) ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+                            <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${enabledModels.includes(model.id) ? 'translate-x-5' : 'translate-x-0.5'}`} />
                          </button>
 
                          {/* Delete Model Button (Right side of toggle, only for custom models) */}
@@ -1386,7 +1423,6 @@ const PublicModelManagementPage: React.FC = () => {
                                         { key: 'structured_output', label: '结构化输出' },
                                         { key: 'tool_call', label: '工具调用' },
                                         { key: 'thinking', label: '思维链' },
-                                        { key: 'reasoning', label: '推理' },
                                         { key: 'streaming', label: '流式输出' },
                                     ],
                                     multimodal: [
@@ -1395,7 +1431,6 @@ const PublicModelManagementPage: React.FC = () => {
                                         { key: 'tts', label: '文字转语音' },
                                         { key: 'speech2text', label: '语音转文字' },
                                         { key: 'thinking', label: '思维链' },
-                                        { key: 'reasoning', label: '推理' },
                                         { key: 'tool_call', label: '工具调用' },
                                         { key: 'structured_output', label: '结构化输出' },
                                     ],

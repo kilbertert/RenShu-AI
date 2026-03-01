@@ -7,22 +7,18 @@
 """
 import logging
 import json
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Tuple
 from uuid import UUID
 from copy import deepcopy
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from openai import AsyncOpenAI
-
-from app.src.core.language_model.entities.model_entity import BaseLanguageModel, ModelFeature
-from app.src.core.language_model.default_models import DEFAULT_PROVIDERS, DEFAULT_MODELS
-
 from app.src.response.exception.exceptions import ResourceNotFoundException, BusinessException
 from app.src.service.base_service import BaseService
 from app.src.common.decorators import require_login
 from app.src.common.context import get_current_user_id, get_user_roles
-from app.src.utils.auth_utils import hash_api_key
+from app.src.utils.auth_utils import hash_api_key, decrypt_api_key
 
 from app.src.model.model_config_models import (
     SystemModelProvider, SystemModelDefinition, UserProviderConfig, UserModelPreference
@@ -57,6 +53,58 @@ class ModelProviderService(BaseService[SystemModelProvider]):
         query = query.order_by(SystemModelProvider.position)
         result = await self.session.exec(query)
         return list(result.all())
+
+    async def get_providers_by_type(self, provider_type: str = 'all', user_id: Optional[UUID] = None) -> List[SystemModelProvider]:
+        """根据类型获取供应商（仅返回启用的）
+        provider_type: all, builtin, custom
+        逻辑：
+        1. 根据类型筛选 (builtin=系统, custom=私有)
+        2. 根据用户配置筛选 is_enabled (如果用户配置不存在，默认为启用)
+        """
+        from sqlmodel import or_
+        
+        # 1. 基础查询
+        query = select(SystemModelProvider)
+        
+        if provider_type == 'builtin':
+            query = query.where(SystemModelProvider.owner_id == None)
+        elif provider_type == 'custom':
+            if user_id:
+                query = query.where(SystemModelProvider.owner_id == user_id)
+            else:
+                return []
+        else: # all
+            conditions = [SystemModelProvider.owner_id == None]
+            if user_id:
+                conditions.append(SystemModelProvider.owner_id == user_id)
+            query = query.where(or_(*conditions))
+
+        query = query.order_by(SystemModelProvider.position)
+        result = await self.session.exec(query)
+        providers = list(result.all())
+        
+        # 2. 过滤禁用状态 (仅当有 user_id 时)
+        if not user_id:
+            return providers
+
+        # 获取该用户的所有配置
+        config_query = select(UserProviderConfig).where(
+            UserProviderConfig.user_id == user_id,
+            UserProviderConfig.provider_id.in_([p.id for p in providers])
+        )
+        config_result = await self.session.exec(config_query)
+        user_configs = {c.provider_id: c for c in config_result.all()}
+        
+        enabled_providers = []
+        for p in providers:
+            config = user_configs.get(p.id)
+            # 规则：如果配置存在，取配置的 is_enabled；如果配置不存在，默认为 True
+            is_enabled = config.is_enabled if config else True
+            
+            if is_enabled:
+                enabled_providers.append(p)
+                
+        return enabled_providers
 
     async def get_builtin_providers(self) -> List[SystemModelProvider]:
         """获取所有系统内置供应商"""
@@ -322,11 +370,13 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
         super().__init__(SystemModelDefinition, session)
         self.provider_service = provider_service
 
-    async def get_models_by_provider(self, provider_id: UUID, user_id: Optional[UUID] = None) -> List[Dict[str, Any]]:
+    async def get_models_by_provider(self, provider_id: UUID, user_id: Optional[UUID] = None, only_enabled: bool = False) -> List[Dict[str, Any]]:
         """获取供应商下的所有模型（合并用户偏好）
         包含：
         1. 系统内置模型 (owner_id IS NULL)
         2. 用户自定义模型 (owner_id == user_id)
+        
+        only_enabled: 是否只返回启用的模型
         """
         # 1. 构建查询：获取系统模型 + 用户私有模型
         from sqlmodel import or_
@@ -338,6 +388,12 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
         
         conditions.append(owner_condition)
         
+        # 优化：如果只查询启用的，且是系统模型，可以先过滤系统级开关为 True 的
+        # 但考虑到用户可能覆盖系统级开关（虽然比较少见），还是查出来再合并比较稳妥
+        # 或者：系统级 is_enabled=False 时，用户能否强制启用？通常不能。系统禁用即全局禁用。
+        # 所以这里可以加 conditions.append(SystemModelDefinition.is_enabled == True) 吗？
+        # 稳妥起见，先全查，内存过滤。
+        
         query = select(SystemModelDefinition).where(*conditions).order_by(SystemModelDefinition.position)
         
         result = await self.session.exec(query)
@@ -345,24 +401,71 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
         
         # 2. 如果没有用户ID，直接返回系统定义 (此时也只查到了系统定义)
         if not user_id:
+            # 如果需要过滤启用
+            if only_enabled:
+                return [
+                    {
+                        "id": m.id,
+                        "provider_id": m.provider_id,
+                        "model_name": m.model_name,
+                        "label": m.label,
+                        "description": m.description,
+                        "model_type": m.model_type,
+                        "features": m.features,
+                        "context_window": m.context_window,
+                        "default_max_tokens": m.default_max_tokens,
+                        "default_parameters": m.default_parameters,
+                        "position": m.position,
+                        "is_enabled": m.is_enabled,
+                        "owner_id": m.owner_id,
+                        "is_custom": False,
+                        "created_at": m.created_at,
+                        "updated_at": m.updated_at
+                    }
+                    for m in all_models if m.is_enabled
+                ]
+            
+            # 返回原始对象（兼容旧逻辑，但旧逻辑期望 Dict 吗？旧逻辑在 get_providers_with_models 里处理了 object/dict）
+            # 注意：旧代码里 `merged_models.append(model_data)` 是 Dict。
+            # 而这里直接返回 `all_models` 是 Objects。
+            # `get_providers_with_models` 里有 `if isinstance(m, dict): ... else ...` 处理。
+            # 为了保持一致性，如果 only_enabled=True，我们返回 Dict。
+            # 如果 only_enabled=False (旧逻辑路径)，我们返回 Objects 以保持 100% 兼容？
+            # 这里的 get_models_by_provider 原来返回 List[Dict[str, Any]] 吗？
+            # 看代码：原来的实现是 `return merged_models` (Dict list) if user_id present.
+            # BUT `if not user_id: return all_models` (Object list).
+            # 所以调用方必须处理 Object 和 Dict 两种情况。
             return all_models
 
-        # 3. 获取用户偏好 (仅针对系统模型，或者用户也可能对自己创建的模型有偏好记录？通常用户直接修改模型本身即可，但保持一致性也无妨)
-        # 这里主要为了获取系统模型的 enabled 状态覆盖等
+        # 3. 获取用户偏好
+        # 确保 ID 格式一致 (转为字符串处理)
+        model_ids = [str(m.id) for m in all_models]
+        
         pref_query = select(UserModelPreference).where(
             UserModelPreference.user_id == user_id,
-            UserModelPreference.model_def_id.in_([m.id for m in all_models])
+            UserModelPreference.model_def_id.in_(model_ids) # type: ignore
         )
         pref_result = await self.session.exec(pref_query)
-        user_prefs = {p.model_def_id: p for p in pref_result.all()}
+        # 使用 str(id) 作为 key
+        user_prefs = {str(p.model_def_id): p for p in pref_result.all()}
 
         # 4. 合并数据
         merged_models = []
         for m in all_models:
-            pref = user_prefs.get(m.id)
+            # 基础检查：如果系统级禁用了，且不是用户自定义模型，那么即使用户偏好启用也没用（通常逻辑）
+            # 或者：用户自定义模型 is_enabled 字段就是控制开关。
             
-            # 判断是否是用户自定义模型
+            pref = user_prefs.get(str(m.id))
             is_custom = m.owner_id == user_id
+            
+            # 计算最终 is_enabled
+            final_enabled = m.is_enabled # 默认取系统/模型本身状态
+            if pref:
+                final_enabled = pref.is_enabled
+            
+            # 过滤逻辑
+            if only_enabled and not final_enabled:
+                continue
             
             # 基础数据
             model_data = {
@@ -377,27 +480,22 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
                 "default_max_tokens": m.default_max_tokens,
                 "default_parameters": m.default_parameters,
                 "position": m.position,
-                "is_enabled": m.is_enabled, # 系统级开关
+                "is_enabled": final_enabled, # 使用计算后的状态
                 "owner_id": m.owner_id,
                 "is_custom": is_custom,
                 "created_at": m.created_at,
                 "updated_at": m.updated_at
             }
             
-            # 应用用户偏好覆盖 (仅当有偏好记录时)
-            if pref:
-                # 即使是用户自定义模型，如果有了偏好记录，也应用偏好（虽然用户可以直接改模型，但为了逻辑统一）
-                model_data["is_enabled"] = pref.is_enabled 
-                
-                if pref.custom_parameters:
-                    custom = pref.custom_parameters
-                    if "context_window" in custom:
-                        model_data["context_window"] = custom["context_window"]
-                    if "default_max_tokens" in custom:
-                        model_data["default_max_tokens"] = custom["default_max_tokens"]
-                    if "temperature" in custom:
-                        model_data["default_parameters"]["temperature"] = custom["temperature"]
-                    # ... 其他参数 ...
+            # 应用其他参数覆盖
+            if pref and pref.custom_parameters:
+                custom = pref.custom_parameters
+                if "context_window" in custom:
+                    model_data["context_window"] = custom["context_window"]
+                if "default_max_tokens" in custom:
+                    model_data["default_max_tokens"] = custom["default_max_tokens"]
+                if "temperature" in custom:
+                    model_data["default_parameters"]["temperature"] = custom["temperature"]
             
             merged_models.append(model_data)
             
@@ -638,7 +736,7 @@ class LanguageModelService:
                         "default_temperature": m["default_parameters"].get("temperature", 0.7),
                         "default_top_p": m["default_parameters"].get("top_p", 1.0),
                         "default_max_tokens": m["default_max_tokens"],
-                        "is_builtin": True,
+                        "is_builtin": m.get("owner_id") is None,
                         "is_enabled": m["is_enabled"]
                     })
                 else:
@@ -654,7 +752,7 @@ class LanguageModelService:
                         "default_temperature": m.default_parameters.get("temperature", 0.7),
                         "default_top_p": m.default_parameters.get("top_p", 1.0),
                         "default_max_tokens": m.default_max_tokens,
-                        "is_builtin": True,
+                        "is_builtin": m.owner_id is None,
                         "is_enabled": m.is_enabled
                     })
             
@@ -662,6 +760,247 @@ class LanguageModelService:
             result.append(provider_data)
 
         return result
+
+    async def get_providers_with_models_filtered(self, user_id: Optional[UUID] = None, provider_type: str = 'all') -> List[Dict[str, Any]]:
+        """获取筛选后的供应商及其模型列表，并填充用户配置"""
+        
+        # 1. 根据类型获取供应商 (已经过滤了 is_enabled)
+        providers = await self.model_config_service.provider_service.get_providers_by_type(user_id=user_id, provider_type=provider_type)
+        
+        # 2. 如果有用户ID，批量获取用户配置
+        user_configs_map = {}
+        if user_id:
+            query = select(UserProviderConfig).where(UserProviderConfig.user_id == user_id)
+            result = await self.session.exec(query)
+            for cfg in result.all():
+                user_configs_map[cfg.provider_id] = cfg
+
+        result = []
+        for provider in providers:
+            # 获取该供应商下的模型 (只获取启用的)
+            models = await self.model_config_service.get_models_by_provider(provider.id, user_id=user_id, only_enabled=True)
+            
+            # 如果该供应商下没有启用的模型，是否还返回？
+            # 逻辑上，如果供应商启用了，但没可用模型，返回它但 models=[] 也是合理的，
+            # 这样前端可以显示“暂无可用模型”提示，而不是直接消失。
+            # 或者如果不返回，前端就完全看不到这个供应商。
+            # 根据用户需求："获取...已启用的模型配置"，没说如果没有模型就不返回提供商。
+            # 但通常为了用户体验，如果没模型，选了也没用。
+            # 不过这里为了保持数据完整性，还是返回，只是 models 为空。
+            
+            # 获取用户配置
+            user_cfg = user_configs_map.get(provider.id)
+            
+            # 构建返回数据（保持与前端原有结构兼容）
+            provider_data = {
+                "id": str(provider.id),
+                "name": provider.name,
+                "label": provider.label,
+                "description": provider.description,
+                "icon": provider.icon,
+                "icon_background": provider.icon_background,
+                "supported_model_types": provider.supported_model_types,
+                "help_url": provider.help_url,
+                "position": provider.position,
+                "is_builtin": provider.owner_id is None, # 如果没有 owner_id，则是系统内置的
+                
+                # 动态字段：根据用户配置填充
+                "base_url": user_cfg.base_url_override if user_cfg and user_cfg.base_url_override else provider.default_base_url,
+                "api_key": user_cfg.api_key if user_cfg else None, # 前端需要知道是否有API Key
+                "is_enabled": user_cfg.is_enabled if user_cfg else True, # 默认启用
+            }
+            
+            # 构建模型列表
+            models_data = []
+            for m in models:
+                # m 可能是 SystemModelDefinition 对象（如果是管理员调用）或者 dict（如果是普通用户调用）
+                # 为了统一，我们检查类型
+                if isinstance(m, dict):
+                    models_data.append({
+                        "id": str(m["id"]),
+                        "model_name": m["model_name"],
+                        "label": m["label"],
+                        "description": m["description"],
+                        "model_type": m["model_type"],
+                        "features": m["features"],
+                        "context_window": m["context_window"],
+                        "default_temperature": m["default_parameters"].get("temperature", 0.7),
+                        "default_top_p": m["default_parameters"].get("top_p", 1.0),
+                        "default_max_tokens": m["default_max_tokens"],
+                        "is_builtin": m.get("owner_id") is None,
+                        "is_enabled": m["is_enabled"]
+                    })
+                else:
+                    # SystemModelDefinition object
+                    models_data.append({
+                        "id": str(m.id),
+                        "model_name": m.model_name,
+                        "label": m.label,
+                        "description": m.description,
+                        "model_type": m.model_type,
+                        "features": m.features,
+                        "context_window": m.context_window,
+                        "default_temperature": m.default_parameters.get("temperature", 0.7),
+                        "default_top_p": m.default_parameters.get("top_p", 1.0),
+                        "default_max_tokens": m.default_max_tokens,
+                        "is_builtin": m.owner_id is None,
+                        "is_enabled": m.is_enabled
+                    })
+            
+            provider_data["models"] = models_data
+            result.append(provider_data)
+
+        return result
+
+    # ---------- 核心功能：模型调用 ----------
+
+    async def get_client(self, user_id: UUID, provider_id: UUID) -> AsyncOpenAI:
+        """获取已配置的 LLM 客户端 - 使用连接池复用"""
+        from app.src.common.config.llm_client_pool import llm_client_pool
+        
+        # 1. 获取供应商
+        provider = await self.model_config_service.provider_service.get(provider_id)
+        if not provider:
+             raise ResourceNotFoundException("供应商不存在")
+
+        # 2. 获取用户配置 (API Key, Base URL)
+        user_config = await self.model_config_service.provider_service.get_user_config(user_id, provider.id)
+
+        # 检查供应商启用状态
+        if user_config and not user_config.is_enabled:
+             raise BusinessException(f"供应商 {provider.label} 未启用")
+        
+        # 获取 API Key 和 Base URL
+        api_key = decrypt_api_key(user_config.api_key) if user_config and user_config.api_key else None
+        base_url = user_config.base_url_override if (user_config and user_config.base_url_override) else provider.default_base_url
+
+        # 校验 API Key
+        if not api_key:
+             # 简单的白名单检查，如果是本地服务可能不需要 Key
+             if base_url and ("localhost" in base_url or "127.0.0.1" in base_url):
+                 api_key = "ollama"
+             else:
+                 raise BusinessException(f"请先在设置中配置 {provider.label} 的 API Key")
+        
+        # 3. 🚀 使用连接池获取/复用客户端
+        try:
+            client = await llm_client_pool.get_or_create_client(
+                provider_id=str(provider_id),
+                api_key=api_key,
+                base_url=base_url,
+                timeout=60.0
+            )
+            return client
+        except Exception as e:
+             raise BusinessException(f"初始化 LLM 客户端失败: {str(e)}")
+
+    async def prepare_chat_completion(
+        self,
+        user_id: UUID,
+        model_id: UUID,
+        provider_id: UUID,
+        messages: List[Dict[str, str]],
+        stream: bool = False,
+        **kwargs
+    ) -> Tuple[AsyncOpenAI, Dict[str, Any]]:
+        """准备 LLM 调用所需的客户端和参数"""
+        
+        # 1. 获取模型定义
+        model_def = await self.model_config_service.get(model_id)
+        if not model_def:
+             raise ResourceNotFoundException(f"模型配置不存在: {model_id}")
+
+        if str(model_def.provider_id) != str(provider_id):
+             raise BusinessException("模型所属供应商不匹配")
+
+        # 2. 获取客户端
+        try:
+            client = await self.get_client(user_id, provider_id)
+        except BusinessException as e:
+            raise e
+        except Exception as e:
+            raise BusinessException(f"初始化 LLM 客户端失败: {str(e)}")
+
+        # 3. 准备参数
+        # 获取用户偏好作为默认值
+        pref = await self.model_config_service.get_user_preference(user_id, model_def.id)
+        
+        # 默认参数优先级：kwargs > 用户偏好 > 模型默认值
+        temperature = kwargs.get("temperature")
+        if temperature is None:
+            if pref and pref.custom_parameters and "temperature" in pref.custom_parameters:
+                temperature = pref.custom_parameters["temperature"]
+            else:
+                temperature = model_def.default_parameters.get("temperature", 0.7)
+        
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is None:
+            if pref and pref.custom_parameters and "default_max_tokens" in pref.custom_parameters:
+                max_tokens = pref.custom_parameters["default_max_tokens"]
+            else:
+                max_tokens = model_def.default_max_tokens
+
+        # 构造最终参数
+        final_model_name = model_def.model_name 
+        
+        params = {
+            "model": final_model_name,
+            "messages": messages,
+            "stream": stream,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+        # 合并其他 kwargs
+        for k, v in kwargs.items():
+            if k not in params:
+                params[k] = v
+                
+        return client, params
+
+    async def generate_chat_completion(
+        self,
+        user_id: UUID,
+        model_id: UUID,
+        provider_id: UUID,
+        model_name: str,
+        messages: List[Dict[str, str]],
+        stream: bool = False,
+        **kwargs
+    ) -> Any:
+        """调用 LLM 生成聊天回复
+        
+        流程：
+        1. 验证模型和供应商是否存在
+        2. 获取用户的供应商配置 (API Key, Base URL)
+        3. 验证配置有效性
+        4. 调用 AsyncOpenAI (兼容所有 OpenAI 格式接口)
+        """
+        
+        client, params = await self.prepare_chat_completion(
+            user_id, model_id, provider_id, messages, stream, **kwargs
+        )
+
+        # 调用 API
+        try:
+            response = await client.chat.completions.create(**params)
+            return response
+        except Exception as e:
+            logging.error(f"LLM Call Failed: {e}")
+            # 尝试获取 provider label 用于错误提示
+            try:
+                provider = await self.model_config_service.provider_service.get(provider_id)
+                provider_label = provider.label if provider else "Unknown Provider"
+            except:
+                provider_label = "Unknown Provider"
+                
+            # 区分不同类型的错误，提供更友好的提示
+            err_msg = str(e)
+            if "401" in err_msg:
+                raise BusinessException(f"API Key 无效或过期 ({provider_label})")
+            elif "404" in err_msg:
+                raise BusinessException(f"模型 {params.get('model')} 不存在或不支持 ({provider_label})")
+            else:
+                raise BusinessException(f"模型调用失败: {err_msg}")
 
     # ---------- 初始化 ----------
 

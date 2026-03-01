@@ -112,8 +112,8 @@ async def get_current_patient(
             "phone": profile.phone if profile else None,
             "gender": profile.gender if profile else None,
             "birth_date": profile.birth_date.isoformat() if profile and profile.birth_date else None,
-            "constitution_type": profile.constitution_type if profile else None,
             "avatar_url": profile.avatar_url if profile else None,
+            "base_profile": profile.base_profile if profile else None,
             "is_active": account.is_active,
             "created_at": account.created_at.isoformat()
         },

@@ -67,25 +67,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // 当路由变化时，更新用户状态
     useEffect(() => {
         const newUser = getInitialUser(location.pathname);
-        setUser(newUser);
+        // Only update if ID or Role changed, preventing redundant updates
+        setUser(prev => {
+            if (prev?.id === newUser?.id && prev?.role === newUser?.role) return prev;
+            return newUser;
+        });
     }, [location.pathname]);
 
     // 后台静默验证 Token（不阻塞页面渲染）
     useEffect(() => {
         const verifyTokenSilently = async () => {
-            const role = getRoleFromPath(location.pathname);
+            // Using user.role directly from state is safer than re-deriving from path
+            // if we trust user state is synced correctly by the effect above.
+            // However, verifyTokenSilently logic relied on localStorage.
+            // Let's keep it robust but prevent re-runs.
+            
+            const role = user?.role; 
             if (!role) return;
 
             const prefix = getStoragePrefix(role);
             const token = localStorage.getItem(`${prefix}access_token`);
-            const savedUser = localStorage.getItem(`${prefix}user`);
-
-            if (token && savedUser) {
+            // We already have 'user' in state, no need to parse from local storage again just for checking existence
+            
+            if (token && user) {
                 try {
-                    const userObj = JSON.parse(savedUser);
-
                     // 根据用户角色调用对应的API验证token
-                    if (userObj.role === UserRole.ADMIN) {
+                    if (role === UserRole.ADMIN) {
                         await adminAuthApi.me();
                     } else {
                         await authApi.getMe();
@@ -109,7 +116,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (user) {
             verifyTokenSilently();
         }
-    }, [location.pathname, user, navigate]);
+    }, [user?.id, user?.role, navigate]); // Removed location.pathname, depend on specific user fields
 
     // 清除认证数据（只清除指定角色的数据）
     const clearAuthData = (role: UserRole) => {
@@ -138,26 +145,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 userData = response.data;
             }
 
-            const loggedInUser: User = {
-                id: authData?.user_id || userData.id,
-                name: userData.username || userData.real_name || 'User',
-                role: role,
-                avatar: userData.avatar_url || (role === UserRole.PUBLIC
-                    ? 'https://picsum.photos/id/64/200/200'
-                    : 'https://picsum.photos/id/55/200/200'),
-                healthScore: 85,
-                persona: role === UserRole.PUBLIC ? {
-                    age: '18',
-                    gender: userData.gender || '男',
-                    chiefComplaint: '发热，头疼',
-                    medicalHistory: '无记录',
-                    suspectedDiagnosis: '待分析...',
-                    contraindications: '无禁忌',
-                    recommendedTreatment: '一般 wellness 建议'
-                } : undefined,
-                specialty: role === UserRole.PROFESSIONAL ? 'Integrative Medicine' : undefined
+            // 解析用户数据 (从 API 响应中获取)
+            const parseUser = (data: any, role: UserRole): User => {
+                return {
+                    id: data.id,
+                    name: data.username || data.email,
+                    role: role,
+                    avatar: data.avatar_url || (role === UserRole.PROFESSIONAL ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' : 'https://api.dicebear.com/7.x/avataaars/svg?seed=User'),
+                    base_profile: data.base_profile || undefined,
+                };
             };
 
+            const loggedInUser = parseUser(userData, role);
             setUser(loggedInUser);
 
             // 使用角色前缀存储用户信息
@@ -181,17 +180,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 avatar: role === UserRole.PUBLIC
                     ? 'https://picsum.photos/id/64/200/200'
                     : 'https://picsum.photos/id/55/200/200',
-                healthScore: 85,
-                persona: role === UserRole.PUBLIC ? {
-                    age: 'Unknown',
-                    gender: 'Unknown',
-                    chiefComplaint: 'None yet',
-                    medicalHistory: 'None recorded',
-                    suspectedDiagnosis: 'Pending analysis...',
-                    contraindications: 'None known',
-                    recommendedTreatment: 'General wellness'
+                base_profile: role === UserRole.PUBLIC ? {
+                    constitution_type: 'Unknown',
+                    taboo_items: [],
+                    medical_history: 'None recorded',
+                    family_history: 'None recorded',
+                    allergy_info: 'None recorded',
+                    merged_diseases: 'None recorded',
                 } : undefined,
-                specialty: role === UserRole.PROFESSIONAL ? 'Integrative Medicine' : undefined
             };
             setUser(basicUser);
 

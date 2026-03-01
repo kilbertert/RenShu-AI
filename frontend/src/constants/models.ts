@@ -2,23 +2,23 @@ import { AIModelConfig } from '../types';
 
 export const AVAILABLE_MODELS: AIModelConfig[] = [
   // Google
-  { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash', description: '极速、智能的下一代模型', supportsThinking: true, supportsVision: true, provider: 'google' },
-  { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro', description: '强大的多模态推理能力', supportsThinking: true, supportsVision: true, provider: 'google' },
-  { id: 'gemini-2.5-flash-latest', name: 'Gemini 2.5 Flash', description: '性能平衡的经典之选', supportsThinking: true, supportsVision: true, provider: 'google' },
+  { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash', description: '极速、智能的下一代模型', supportsThinking: true, supportsVision: true, supportsToolCall: true, provider: 'google' },
+  { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro', description: '强大的多模态推理能力', supportsThinking: true, supportsVision: true, supportsToolCall: true, provider: 'google' },
+  { id: 'gemini-2.5-flash-latest', name: 'Gemini 2.5 Flash', description: '性能平衡的经典之选', supportsThinking: true, supportsVision: true, supportsToolCall: true, provider: 'google' },
 
   // OpenAI
-  { id: 'gpt-4o', name: 'GPT-4o', description: 'OpenAI 旗舰全能模型', supportsThinking: false, supportsVision: true, provider: 'openai' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o-mini', description: '高效、轻量的小模型', supportsThinking: false, supportsVision: true, provider: 'openai' },
-  { id: 'o1-preview', name: 'o1-preview', description: '擅长复杂逻辑推理', supportsThinking: true, supportsVision: false, provider: 'openai' },
+  { id: 'gpt-4o', name: 'GPT-4o', description: 'OpenAI 旗舰全能模型', supportsThinking: false, supportsVision: true, supportsToolCall: true, provider: 'openai' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o-mini', description: '高效、轻量的小模型', supportsThinking: false, supportsVision: true, supportsToolCall: true, provider: 'openai' },
+  { id: 'o1-preview', name: 'o1-preview', description: '擅长复杂逻辑推理', supportsThinking: true, supportsVision: false, supportsToolCall: false, provider: 'openai' },
 
   // Anthropic
-  { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', description: '最智能的 Claude 模型', supportsThinking: false, supportsVision: true, provider: 'anthropic' },
-  { id: 'claude-3-opus', name: 'Claude 3 Opus', description: '深度思考与长文本处理', supportsThinking: false, supportsVision: true, provider: 'anthropic' },
+  { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', description: '最智能的 Claude 模型', supportsThinking: false, supportsVision: true, supportsToolCall: true, provider: 'anthropic' },
+  { id: 'claude-3-opus', name: 'Claude 3 Opus', description: '深度思考与长文本处理', supportsThinking: false, supportsVision: true, supportsToolCall: true, provider: 'anthropic' },
 
   // Qwen (阿里千问)
-  { id: 'qwen-max', name: '通义千问-Max', description: '阿里最强商用模型', supportsThinking: false, supportsVision: true, provider: 'qwen' },
-  { id: 'qwen-plus', name: '通义千问-Plus', description: '能力全面提升', supportsThinking: false, supportsVision: true, provider: 'qwen' },
-  { id: 'qwen-turbo', name: '通义千问-Turbo', description: '极速响应', supportsThinking: false, supportsVision: false, provider: 'qwen' },
+  { id: 'qwen-max', name: '通义千问-Max', description: '阿里最强商用模型', supportsThinking: false, supportsVision: true, supportsToolCall: true, provider: 'qwen' },
+  { id: 'qwen-plus', name: '通义千问-Plus', description: '能力全面提升', supportsThinking: false, supportsVision: true, supportsToolCall: true, provider: 'qwen' },
+  { id: 'qwen-turbo', name: '通义千问-Turbo', description: '极速响应', supportsThinking: false, supportsVision: false, supportsToolCall: false, provider: 'qwen' },
 ];
 
 export const PROVIDERS = [
@@ -67,7 +67,6 @@ export const MODEL_FEATURES = [
     { id: 'structured', label: '结构化输出' },
     { id: 'tools', label: '工具调用' },
     { id: 'thinking', label: '思维链' },
-    { id: 'reasoning', label: '推理' },
     { id: 'streaming', label: '流式输出' },
     { id: 'vision', label: '视觉识别' }
 ];
@@ -84,3 +83,10 @@ export const FEATURE_COLORS: Record<string, string> = {
   'embedding': 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400',
   'rerank': 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
 };
+
+
+// Providers/Models that need color inversion in dark mode (usually black logos)
+export const SHOULD_INVERT_DARK = [
+  'openai', 'ollama', 'anthropic', 'x', 'moonshot', 'github', 'openrouter',
+  'gpt', 'claude', 'grok', 'kimi'
+];

@@ -30,6 +30,18 @@ import modelMeta from '../assets/model/model.meta.svg';
 import modelGpt from '../assets/model/model.gpt.svg';
 
 
+export const SHOULD_INVERT_DARK = [
+  'openai', 'ollama', 'moonshot', 'github', 'openrouter',
+  'gpt', 'grok', 'kimi', 'anthropic'
+];
+
+export const isDarkInvert = (name: string): boolean => {
+    if (!name) return false;
+    const lower = name.toLowerCase();
+    if (lower === 'x' || lower === 'xai') return true;
+    return SHOULD_INVERT_DARK.some(key => lower.includes(key));
+};
+
 export const getProviderIconPath = (name: string): string | undefined => {
   if (!name) return undefined;
   const lowerName = name.toLowerCase();

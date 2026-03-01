@@ -36,6 +36,11 @@ const getTokenPrefix = (): string => {
     return 'user_';
 };
 
+// 获取当前 Token
+export const getToken = (): string => {
+    return localStorage.getItem(`${getTokenPrefix()}access_token`) || '';
+};
+
 // 清除认证数据并跳转到登录页
 const handleAuthFailure = () => {
     const prefix = getTokenPrefix();
@@ -62,7 +67,7 @@ const handleAuthFailure = () => {
 // 创建axios实例
 const request: AxiosInstance = axios.create({
   baseURL: getBaseURL(),
-  timeout: 10000,
+  timeout: 600000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -71,8 +76,7 @@ const request: AxiosInstance = axios.create({
 // 请求拦截器
 request.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const prefix = getTokenPrefix();
-    const token = localStorage.getItem(`${prefix}access_token`);
+    const token = getToken();
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -156,4 +160,140 @@ request.interceptors.response.use(
   }
 );
 
+// ============================================
+// 🚀 原生 Fetch SSE 流式请求封装（无自动重连）
+// ============================================
+
+export interface StreamRequestConfig {
+  url: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  data?: any;
+  headers?: Record<string, string>;
+  onMessage: (data: any) => void;
+  onError?: (error: Error) => void;
+  onComplete?: () => void;
+}
+
+/**
+ * 原生 Fetch SSE 流式请求封装
+ * 
+ * 特性：
+ * - ✅ 无自动重连（切换窗口不会重发请求）
+ * - ✅ 自动携带 Token
+ * - ✅ 统一错误处理
+ * - ✅ 支持请求取消
+ * - ✅ 类型安全
+ * - ✅ 长时间流式响应支持（无超时限制）
+ */
+export const streamRequest = async (config: StreamRequestConfig): Promise<() => void> => {
+  const {
+    url,
+    method = 'POST',
+    data,
+    headers = {},
+    onMessage,
+    onError,
+    onComplete
+  } = config;
+
+  const controller = new AbortController();
+  const token = getToken();
+
+  try {
+    const response = await fetch(`${getBaseURL()}${url}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+        ...headers
+      },
+      body: data ? JSON.stringify(data) : undefined,
+      signal: controller.signal,
+      // ✅ 不设置 timeout，允许长时间流式响应
+      // keepalive: true,  // 保持连接活跃（可选）
+    });
+
+    // 处理 HTTP 错误
+    if (!response.ok) {
+      if (response.status === 401) {
+        handleAuthFailure();
+      }
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Response body is not readable');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    // 读取流
+    const processStream = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) {
+            onComplete?.();
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          
+          // 处理 SSE 格式: "data: {...}\n\n"
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // 保留不完整的行
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(':')) continue; // 跳过空行和注释
+            
+            if (trimmed.startsWith('data: ')) {
+              const dataStr = trimmed.slice(6);
+              
+              // 结束信号
+              if (dataStr === '[DONE]') {
+                onComplete?.();
+                return;
+              }
+
+              try {
+                const parsed = JSON.parse(dataStr);
+                onMessage(parsed);
+              } catch (parseError) {
+                console.warn('Failed to parse SSE data:', dataStr);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // 忽略手动取消的错误
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
+        throw err;
+      }
+    };
+
+    // 启动流处理（不等待完成）
+    processStream().catch((err) => {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        onError?.(err);
+      }
+    });
+
+  } catch (error) {
+    // 忽略手动取消的错误
+    if (error instanceof Error && error.name !== 'AbortError') {
+      onError?.(error);
+    }
+  }
+
+  // 返回取消函数
+  return () => controller.abort();
+};
+
 export default request;
+export { getBaseURL };

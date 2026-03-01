@@ -27,19 +27,31 @@ class PostgreSQLAsyncSessionManager:
         self.async_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
     async def init(self) -> None:
-        """初始化异步数据库配置"""
+        """初始化异步数据库配置 - 企业级优化"""
         logger.info("----------初始化异步数据库配置----------------!")
 
+        # 🚀 企业级优化：增大连接池，混合负载优化
+        optimized_pool_size = max(settings.POSTGRESQL_POOL_SIZE, 20)
+        optimized_max_overflow = max(settings.POSTGRESQL_MAX_OVERFLOW, 40)
+        
         self.async_engine = create_async_engine(
             url=settings.async_connection_url,
-            pool_size=settings.POSTGRESQL_POOL_SIZE,
+            pool_size=optimized_pool_size,  # 从 10 增加到 20+
             echo=settings.POSTGRESQL_ECHO,
-            max_overflow=settings.POSTGRESQL_MAX_OVERFLOW,
+            max_overflow=optimized_max_overflow,  # 从 20 增加到 40+
             pool_recycle=settings.POSTGRESQL_POOL_RECYCLE,
             pool_timeout=settings.POSTGRESQL_POOL_TIMEOUT,
-            pool_pre_ping=True  # 健康检查：确保连接可用
+            pool_pre_ping=True,  # 健康检查：确保连接可用
+            # 🚀 新增优化参数
+            pool_use_lifo=True,  # LIFO 模式，复用热连接
+            connect_args={
+                "server_settings": {
+                    "jit": "off",  # 关闭 JIT，减少编译开销
+                    "application_name": "SmartTCM-Agent"
+                }
+            }
         )
-        logger.info("--------------PostgreSQL异步引擎创建成功----------------")
+        logger.info(f"--------------PostgreSQL异步引擎创建成功 (连接池={optimized_pool_size}, 溢出={optimized_max_overflow})----------------")
         print(f"异步连接URL: {settings.async_connection_url}")
 
         self.async_session_factory = async_sessionmaker(

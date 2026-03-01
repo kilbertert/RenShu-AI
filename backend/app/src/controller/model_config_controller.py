@@ -6,7 +6,7 @@
 """
 
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request,Query
 from app.src.dependencies.dependency import LanguageModelServiceDep, get_model_provider_service
 from app.src.response.response_models import BaseResponse
 from app.src.schema.model_config_schema import (
@@ -64,6 +64,43 @@ async def get_providers_with_models(
     return success_200(
         data=result,
         message="获取供应商列表成功",
+        request_id=request_id,
+        host_id=client_ip
+    )
+
+
+@router.get(
+    "/providers/filter",
+    summary="根据类型筛选供应商及模型列表",
+    response_model=BaseResponse[List[dict]]
+)
+async def get_providers_filtered(
+    request: Request,
+    model_service: LanguageModelServiceDep,
+    type: str = Query("all", description="Provider type: all, builtin, custom")
+):
+    """根据类型筛选供应商及其模型列表
+    
+    type: all, builtin, custom
+    """
+    client_ip = request.state.client_ip
+    request_id = request.state.request_id
+
+    # 获取当前用户信息（如果已登录）
+    from app.src.common.context import get_current_user_id
+    try:
+        user_id = get_current_user_id()
+    except:
+        user_id = None
+
+    # 获取整合后的数据
+    result = await model_service.get_providers_with_models_filtered(user_id=user_id, provider_type=type)
+
+    if result is None:
+        result=[]
+    return success_200(
+        data=result,
+        message="获取筛选后的供应商列表成功",
         request_id=request_id,
         host_id=client_ip
     )

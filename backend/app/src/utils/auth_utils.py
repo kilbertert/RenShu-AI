@@ -10,13 +10,16 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from fastapi import HTTPException  # type: ignore
+from cryptography.fernet import Fernet
 from app.src.common.config.setting_config import settings
 from app.src.utils import get_logger
 from fastapi import Request
 
 
 logger=get_logger("auth")
-   
+
+# 初始化加密器
+cipher_suite = Fernet(settings.ENCRYPTION_KEY)
 
 # JWT配置
 # 生产配置：这里需要 使用加密安全的随机生成器生成，可以通过环境变量或者外部服务管理秘钥，并做定期轮换
@@ -26,18 +29,47 @@ ACCESS_TOKEN_EXPIRE_HOURS = 24  # 普通接口访问携带的token过期时间�
 REFRESH_TOKEN_EXPIRE_DAYS = 30  # 刷新token过期时间为30天
 
 
-def hash_api_key(api_key: str) -> str:
-        """API key hashing"""
+def encrypt_api_key(api_key: str) -> str:
+        """Encrypt API key using Fernet (Symmetric Encryption)"""
         try:
-            hashed = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
-            return hashed
+            if not api_key:
+                return api_key
+            encrypted = cipher_suite.encrypt(api_key.encode('utf-8'))
+            return encrypted.decode('utf-8')
         except Exception as e:
-            logger.error(f"API key hashing failed: {e}")
+            logger.error(f"API key encryption failed: {e}")
             raise
-def verify_api_key(hashed_api_key: str, input_api_key: str) -> bool:
+
+def decrypt_api_key(encrypted_api_key: str) -> str:
+        """Decrypt API key"""
+        try:
+            if not encrypted_api_key:
+                return encrypted_api_key
+            # Handle plain text keys (for backward compatibility or during migration)
+            # Fernet tokens are URL-safe base64, so they shouldn't have spaces or certain chars.
+            # But simplest is to try decrypt, if fail, assume it's plain text (DANGEROUS if not careful, but useful for dev)
+            # Actually, let's just try-except.
+            try:
+                decrypted = cipher_suite.decrypt(encrypted_api_key.encode('utf-8'))
+                return decrypted.decode('utf-8')
+            except Exception:
+                # Fallback: return as is (assuming it was not encrypted or plain text)
+                # In production, you might want to log this or fail.
+                logger.warning("Failed to decrypt API key, returning raw value (might be plain text)")
+                return encrypted_api_key
+        except Exception as e:
+            logger.error(f"API key decryption failed: {e}")
+            raise
+
+def hash_api_key(api_key: str) -> str:
+    """Deprecated: Use encrypt_api_key instead. Kept for compatibility."""
+    return encrypt_api_key(api_key)
+
+def verify_api_key(encrypted_api_key: str, input_api_key: str) -> bool:
         """API key verification"""
         try:
-            is_valid = hashed_api_key == hash_api_key(input_api_key)
+            decrypted = decrypt_api_key(encrypted_api_key)
+            is_valid = decrypted == input_api_key
             if is_valid:
                 logger.info("API key verification successful")
             else:

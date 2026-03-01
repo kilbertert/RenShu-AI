@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     JWT_SECRET_KEY: str = Field(default="your_jwt_secret_key", description="JWT密钥")
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT算法")
+    ENCRYPTION_KEY: str = Field(default="I0K4TwQNAVzlZK-Vy8GcldgT1Eq1XAtU4GzmWGE8FNU=", description="数据加密密钥(Fernet)")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, description="JWT访问令牌有效期（分钟）")
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30, description="JWT刷新令牌有效期（天）")
 

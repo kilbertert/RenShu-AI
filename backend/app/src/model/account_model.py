@@ -108,17 +108,11 @@ class Patient(SQLModel, table=True):
     phone: Optional[str] = Field(default=None, max_length=20, description="手机号")
     gender: Optional[str] = Field(default=None, max_length=10, description="性别")
     birth_date: Optional[date] = Field(default=None, description="出生日期")
-    constitution_type: Optional[str] = Field(default=None, max_length=50, description="体质类型")
     avatar_url: Optional[str] = Field(default=None, max_length=255, description="头像URL")
-
-    # 患者特有字段
-    medical_history: Optional[str] = Field(default=None, description="既往病史")
-    family_history: Optional[str] = Field(default=None, description="家族病史")
-    allergy_info: Optional[str] = Field(default=None, description="过敏信息")
-    current_medications: Optional[str] = Field(default=None, description="当前用药情况")
-    emergency_contact_name: Optional[str] = Field(default=None, max_length=50, description="紧急联系人姓名")
-    emergency_contact_phone: Optional[str] = Field(default=None, max_length=20, description="紧急联系人电话")
-
+    # 基础健康画像 (Base Profile) - 存储JSON
+    # 包含：体质类型、既往病史、家族病史、过敏信息、合并症、禁忌项等
+    base_profile: Optional[Dict[str, Any]] = Field(sa_column=Column(JSON, nullable=True), default=None, description="基础健康画像")
+     #base_profile包含了 体质类型（constitution_type） 禁忌项（taboo_items） 既往病史(medical_history)、 家族病史( family_history) 、 allergy_info（过敏信息）
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 

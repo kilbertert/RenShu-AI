@@ -97,5 +97,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        timeout_keep_alive=300,  # 保持连接5分钟，避免长时间流式响应被中断
+        timeout_graceful_shutdown=30  # 优雅关闭超时30秒
     )

@@ -1,5 +1,11 @@
 import React from 'react';
 import {
+  Thermometer ,
+  BookOpen,
+  Coffee,
+  RotateCcw,
+  Sliders,
+  AlertTriangle,
   ExternalLink,
   Stethoscope,
   User,
@@ -13,6 +19,7 @@ import {
   Send,
   ShieldPlus,
   BrainCircuit,
+  Brain,
   Leaf,
   ChevronRight,
   ChevronDown,
@@ -36,6 +43,12 @@ import {
 } from 'lucide-react';
 
 export const Icons = {
+  Thermometer ,
+  BookOpen,
+  Coffee,
+  RotateCcw,
+  Sliders,
+  AlertTriangle,
   ExternalLink,
   Stethoscope,
   User,
@@ -49,6 +62,7 @@ export const Icons = {
   Send,
   ShieldPlus,
   BrainCircuit,
+  Brain,
   Leaf,
   ChevronRight,
   ChevronDown,

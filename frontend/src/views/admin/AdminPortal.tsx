@@ -795,7 +795,6 @@ const AdminPortal: React.FC<AdminPortalProps> = ({ user, onLogout }) => {
                         { key: 'structured_output', label: '结构化输出' },
                         { key: 'tool_call', label: '工具调用' },
                         { key: 'thinking', label: '思维链' },
-                        { key: 'reasoning', label: '推理' },
                         { key: 'streaming', label: '流式输出' },
                       ],
                       multimodal: [
@@ -804,7 +803,6 @@ const AdminPortal: React.FC<AdminPortalProps> = ({ user, onLogout }) => {
                         { key: 'tts', label: '文字转语音' },
                         { key: 'speech2text', label: '语音转文字' },
                         { key: 'thinking', label: '思维链' },
-                        { key: 'reasoning', label: '推理' },
                         { key: 'tool_call', label: '工具调用' },
                         { key: 'structured_output', label: '结构化输出' },
                       ],
