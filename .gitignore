@@ -13,8 +13,11 @@ backend/.env
 .env
 .esdata
 frontend/node_modules
-
+.opencode
 .trae
 /docs
-
+.qoder
 /teacher
+.claude
+.codex
+.vscode

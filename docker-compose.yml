@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Qdrant 向量数据库 - 用于Mem0的语义检索
+  # ============================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: tcm-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE_HTTP_PORT=6333
+      - QDRANT__LOG_LEVEL=DEBUG
+    networks:
+      - tcm_network
+    restart: unless-stopped
+
+  # ============================================
+  # Neo4j 图数据库 - 用于Mem0的关系检索
+  # ============================================
+  neo4j:
+    image: neo4j:5.26.4
+    container_name: tcm-neo4j
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_plugins:/plugins
+    environment:
+      - NEO4J_AUTH=neo4j/tcm_graph_2026
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_max__size=2G
+      - NEO4J_dbms_memory_heap_initial__size=512m
+    networks:
+      - tcm_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qdrant_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_plugins:
+    driver: local
+
+networks:
+  tcm_network:
+    driver: bridge

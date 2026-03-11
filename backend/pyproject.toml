@@ -11,6 +11,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "redis>=5.0.0",
     "langchain-deepseek>=1.0.1",
+    "pymilvus>=2.6.0",
 ]
 
 [[tool.uv.index]]

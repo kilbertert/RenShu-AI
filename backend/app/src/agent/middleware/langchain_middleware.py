@@ -328,51 +328,51 @@ def get_model_retry_middleware(
     )
 
 
-def get_summarization_middleware(
-    config: Optional[TCMLangChainMiddlewareConfig] = None
-) -> Optional[LangChainMiddlewareWrapper]:
-    """
-    获取对话摘要中间件
-
-    当对话历史接近 Token 限制时自动生成摘要。
-    使用 TCM 专用摘要模板，保留关键医学信息。
-
-    Args:
-        config: 配置对象
-
-    Returns:
-        包装后的 SummarizationMiddleware，如果未启用则返回 None
-    """
-    config = config or TCMLangChainMiddlewareConfig()
-
-    if not config.enable_summarization:
-        return None
-
-    # 延迟导入，避免循环依赖
-    from ..tcm_builder import get_llm
-    
-    middleware = SummarizationMiddleware(
-        model=get_llm(),
-        trigger=[
-            ("tokens", config.summarization_trigger_tokens),
-            ("messages", config.summarization_trigger_messages),
-        ],
-        keep=("messages", config.summarization_keep_messages),
-        summary_prompt=config.summarization_prompt,
-    )
-
-    logger.info(
-        f"SummarizationMiddleware 已创建: "
-        f"trigger_tokens={config.summarization_trigger_tokens}, "
-        f"trigger_messages={config.summarization_trigger_messages}, "
-        f"keep_messages={config.summarization_keep_messages}"
-    )
-    
-    return LangChainMiddlewareWrapper(
-        middleware,
-        priority=7,
-        name="SummarizationMiddleware"
-    )
+# def get_summarization_middleware(
+#     config: Optional[TCMLangChainMiddlewareConfig] = None
+# ) -> Optional[LangChainMiddlewareWrapper]:
+#     """
+#     获取对话摘要中间件
+#
+#     当对话历史接近 Token 限制时自动生成摘要。
+#     使用 TCM 专用摘要模板，保留关键医学信息。
+#
+#     Args:
+#         config: 配置对象
+#
+#     Returns:
+#         包装后的 SummarizationMiddleware，如果未启用则返回 None
+#     """
+#     config = config or TCMLangChainMiddlewareConfig()
+#
+#     if not config.enable_summarization:
+#         return None
+#
+#     # 延迟导入，避免循环依赖
+#     from ..tcm_builder import get_llm
+#
+#     middleware = SummarizationMiddleware(
+#         model=get_llm(),
+#         trigger=[
+#             ("tokens", config.summarization_trigger_tokens),
+#             ("messages", config.summarization_trigger_messages),
+#         ],
+#         keep=("messages", config.summarization_keep_messages),
+#         summary_prompt=config.summarization_prompt,
+#     )
+#
+#     logger.info(
+#         f"SummarizationMiddleware 已创建: "
+#         f"trigger_tokens={config.summarization_trigger_tokens}, "
+#         f"trigger_messages={config.summarization_trigger_messages}, "
+#         f"keep_messages={config.summarization_keep_messages}"
+#     )
+#
+#     return LangChainMiddlewareWrapper(
+#         middleware,
+#         priority=7,
+#         name="SummarizationMiddleware"
+#     )
 
 
 # ============================================================
@@ -411,10 +411,10 @@ def get_all_langchain_middlewares(
     # if fallback:
     #     middlewares.append(fallback)
 
-    # 3. 摘要中间件
-    summarization = get_summarization_middleware(config)
-    if summarization:
-        middlewares.append(summarization)
+    # # 3. 摘要中间件
+    # summarization = get_summarization_middleware(config)
+    # if summarization:
+    #     middlewares.append(summarization)
 
     # 4. 成本控制中间件
     model_limit = get_model_call_limit_middleware(config)
@@ -438,6 +438,6 @@ __all__ = [
     # "get_model_fallback_middleware",
     "get_tool_retry_middleware",
     "get_model_retry_middleware",
-    "get_summarization_middleware",
+    # "get_summarization_middleware",
     "get_all_langchain_middlewares",
 ]

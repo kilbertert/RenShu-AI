@@ -36,22 +36,22 @@ class ChatService:
 
     # ========== 使用装饰器的方法 ==========
 
-    @require_login
-    async def generate_chat(self, chat_request: ChatRequest, background_tasks: BackgroundTasks = None):
-        """
-        生成聊天回复（需要登录）- 支持流式输出
-        :param chat_request: 聊天请求
-        :param background_tasks: FastAPI 后台任务对象
-        :return: 聊天回复或流式生成器
-        """
-        user_id = get_current_user_id()
-        
-        # 如果请求流式输出，返回异步生成器
-        if chat_request.stream:
-            return self._generate_stream(chat_request, user_id, background_tasks)
-        else:
-            # 非流式输出
-            return await self._generate(chat_request, user_id)
+    # @require_login
+    # async def generate_chat(self, chat_request: ChatRequest, background_tasks: BackgroundTasks = None):
+    #     """
+    #     生成聊天回复（需要登录）- 支持流式输出
+    #     :param chat_request: 聊天请求
+    #     :param background_tasks: FastAPI 后台任务对象
+    #     :return: 聊天回复或流式生成器
+    #     """
+    #     user_id = get_current_user_id()
+    #
+    #     # 如果请求流式输出，返回异步生成器
+    #     if chat_request.stream:
+    #         return self._generate_stream(chat_request, user_id, background_tasks)
+    #     else:
+    #         # 非流式输出
+    #         return await self._generate(chat_request, user_id)
 
     @require_login
     async def analyze_persona(self, request: PersonaAnalysisRequest):
@@ -180,120 +180,120 @@ class ChatService:
             return request.current_persona
 
     # ========== 内部方法 ==========
-
-    async def _generate_stream(self, chat_request: ChatRequest, user_id: str, background_tasks: BackgroundTasks = None) -> AsyncGenerator[str, None]:
-        """流式生成聊天回复 - 企业级优化
-
-        优化点：
-        1. SSE 流式输出，降低 TTFB（首字节时间）
-        2. 并行处理 DB 保存和 LLM 生成
-        3. 缓存热点配置
-        4. 🚀 智能批量发送：当内容累积较多时，合并发送以提升渲染效率
-        """
-        from app.src.utils.token_counter import estimate_tokens
-        import time
-
-        conversation_id = chat_request.conversation_id
-        title = chat_request.query[:50]
-
-        # 1. 快速保存用户消息（短事务）
-        conversation = await self.conversation_service._get_or_create_conversation(conversation_id, user_id, title)
-
-        user_message = Message(
-            conversation_id=conversation_id,
-            role="user",
-            content=chat_request.query
-        )
-        self.conversation_service.session.add(user_message)
-        await self.conversation_service.session.flush()
-
-        user_input_tokens = estimate_tokens(chat_request.query)
-        conversation.accumulated_tokens += user_input_tokens
-        conversation.total_tokens += user_input_tokens
-        self.conversation_service.session.add(conversation)
-
-        # 提前提交，释放锁
-        await self.conversation_service.session.commit()
-        logger.info(f"✅ [流式] 用户消息已保存，conversation_id={conversation_id}")
-
-        # 2. 获取历史消息
-        history_stmt = select(Message).where(
-            Message.conversation_id == conversation_id
-        ).order_by(Message.created_at)
-
-        history_result = await self.conversation_service.session.exec(history_stmt)
-        history_messages = history_result.all()
-
-        messages_payload = [
-            {"role": msg.role, "content": msg.content}
-            for msg in history_messages
-        ]
-
-        # 3. 流式调用 LLM
-        accumulated_content = []
-        try:
-            config = chat_request.model_configuration
-
-            # 🔥 关键：使用流式模式
-            response = await self.model_service.generate_chat_completion(
-                user_id=UUID(user_id),
-                model_id=config.model_id,
-                provider_id=config.provider_id,
-                model_name=config.model_name,
-                messages=messages_payload,
-                stream=True,  # 开启流式
-                temperature=config.temperature,
-                top_p=config.top_p,
-                max_tokens=config.max_tokens
-            )
-
-            # 4. 🚀 智能批量流式输出
-            # 策略：累积内容，每 50ms 或累积超过 50 字符时发送一次
-            batch_buffer = []
-            last_send_time = time.time()
-            BATCH_INTERVAL = 0.05  # 50ms
-            BATCH_SIZE_THRESHOLD = 50  # 50 字符
-
-            async for chunk in response:
-                if chunk.choices and len(chunk.choices) > 0:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        accumulated_content.append(delta.content)
-                        batch_buffer.append(delta.content)
-
-                        current_time = time.time()
-                        batch_content = "".join(batch_buffer)
-
-                        # 检查是否需要发送：时间间隔超过 50ms 或内容超过 50 字符
-                        should_send = (
-                            current_time - last_send_time >= BATCH_INTERVAL or
-                            len(batch_content) >= BATCH_SIZE_THRESHOLD
-                        )
-
-                        if should_send and batch_content:
-                            # 输出 SSE 格式（合并后的内容）
-                            yield f"data: {json.dumps({'content': batch_content}, ensure_ascii=False)}\n\n"
-                            batch_buffer = []
-                            last_send_time = current_time
-
-            # 发送剩余的 buffer 内容
-            if batch_buffer:
-                remaining_content = "".join(batch_buffer)
-                yield f"data: {json.dumps({'content': remaining_content}, ensure_ascii=False)}\n\n"
-
-            # 5. ✅ 流结束后，注册后台保存任务
-            full_content = "".join(accumulated_content)
-            if full_content and background_tasks:
-                background_tasks.add_task(self._save_ai_message, conversation_id, user_id, full_content)
-                logger.info(f"🚀 [流式] 已注册后台保存任务，总长度={len(full_content)}")
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            logger.error(f"❌ [流式] 错误: {e}")
-            await self.conversation_service.session.rollback()
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
-
-
-    
+    #
+    # async def _generate_stream(self, chat_request: ChatRequest, user_id: str, background_tasks: BackgroundTasks = None) -> AsyncGenerator[str, None]:
+    #     """流式生成聊天回复 - 企业级优化
+    #
+    #     优化点：
+    #     1. SSE 流式输出，降低 TTFB（首字节时间）
+    #     2. 并行处理 DB 保存和 LLM 生成
+    #     3. 缓存热点配置
+    #     4. 🚀 智能批量发送：当内容累积较多时，合并发送以提升渲染效率
+    #     """
+    #     from app.src.utils.token_counter import estimate_tokens
+    #     import time
+    #
+    #     conversation_id = chat_request.conversation_id
+    #     title = chat_request.query[:50]
+    #
+    #     # 1. 快速保存用户消息（短事务）
+    #     conversation = await self.conversation_service._get_or_create_conversation(conversation_id, user_id, title)
+    #
+    #     user_message = Message(
+    #         conversation_id=conversation_id,
+    #         role="user",
+    #         content=chat_request.query
+    #     )
+    #     self.conversation_service.session.add(user_message)
+    #     await self.conversation_service.session.flush()
+    #
+    #     user_input_tokens = estimate_tokens(chat_request.query)
+    #     conversation.accumulated_tokens += user_input_tokens
+    #     conversation.total_tokens += user_input_tokens
+    #     self.conversation_service.session.add(conversation)
+    #
+    #     # 提前提交，释放锁
+    #     await self.conversation_service.session.commit()
+    #     logger.info(f"✅ [流式] 用户消息已保存，conversation_id={conversation_id}")
+    #
+    #     # 2. 获取历史消息
+    #     history_stmt = select(Message).where(
+    #         Message.conversation_id == conversation_id
+    #     ).order_by(Message.created_at)
+    #
+    #     history_result = await self.conversation_service.session.exec(history_stmt)
+    #     history_messages = history_result.all()
+    #
+    #     messages_payload = [
+    #         {"role": msg.role, "content": msg.content}
+    #         for msg in history_messages
+    #     ]
+    #
+    #     # 3. 流式调用 LLM
+    #     accumulated_content = []
+    #     try:
+    #         config = chat_request.model_configuration
+    #
+    #         # 🔥 关键：使用流式模式
+    #         response = await self.model_service.generate_chat_completion(
+    #             user_id=UUID(user_id),
+    #             model_id=config.model_id,
+    #             provider_id=config.provider_id,
+    #             model_name=config.model_name,
+    #             messages=messages_payload,
+    #             stream=True,  # 开启流式
+    #             temperature=config.temperature,
+    #             top_p=config.top_p,
+    #             max_tokens=config.max_tokens
+    #         )
+    #
+    #         # 4. 🚀 智能批量流式输出
+    #         # 策略：累积内容，每 50ms 或累积超过 50 字符时发送一次
+    #         batch_buffer = []
+    #         last_send_time = time.time()
+    #         BATCH_INTERVAL = 0.05  # 50ms
+    #         BATCH_SIZE_THRESHOLD = 50  # 50 字符
+    #
+    #         async for chunk in response:
+    #             if chunk.choices and len(chunk.choices) > 0:
+    #                 delta = chunk.choices[0].delta
+    #                 if delta.content:
+    #                     accumulated_content.append(delta.content)
+    #                     batch_buffer.append(delta.content)
+    #
+    #                     current_time = time.time()
+    #                     batch_content = "".join(batch_buffer)
+    #
+    #                     # 检查是否需要发送：时间间隔超过 50ms 或内容超过 50 字符
+    #                     should_send = (
+    #                         current_time - last_send_time >= BATCH_INTERVAL or
+    #                         len(batch_content) >= BATCH_SIZE_THRESHOLD
+    #                     )
+    #
+    #                     if should_send and batch_content:
+    #                         # 输出 SSE 格式（合并后的内容）
+    #                         yield f"data: {json.dumps({'content': batch_content}, ensure_ascii=False)}\n\n"
+    #                         batch_buffer = []
+    #                         last_send_time = current_time
+    #
+    #         # 发送剩余的 buffer 内容
+    #         if batch_buffer:
+    #             remaining_content = "".join(batch_buffer)
+    #             yield f"data: {json.dumps({'content': remaining_content}, ensure_ascii=False)}\n\n"
+    #
+    #         # 5. ✅ 流结束后，注册后台保存任务
+    #         full_content = "".join(accumulated_content)
+    #         if full_content and background_tasks:
+    #             background_tasks.add_task(self._save_ai_message, conversation_id, user_id, full_content)
+    #             logger.info(f"🚀 [流式] 已注册后台保存任务，总长度={len(full_content)}")
+    #         yield "data: [DONE]\n\n"
+    #     except Exception as e:
+    #         logger.error(f"❌ [流式] 错误: {e}")
+    #         await self.conversation_service.session.rollback()
+    #         yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+    #
+    #
+    #
     async def _save_ai_message(self, conversation_id: str, user_id: str, content: str):
         """异步保存 AI 消息（不阻塞流式输出）"""
         try:
@@ -460,7 +460,6 @@ class ChatService:
                 message=chat_request.query,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                user_profile={},
                 provider_name=model_config.get("provider_name"),
                 model_name=model_config.get("model_name"),
                 api_key=model_config.get("api_key"),
