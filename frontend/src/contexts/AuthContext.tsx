@@ -132,74 +132,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    // 登录处理
+    // 登录处理：先基于 authData 立即登录 + 跳转,后台再异步补全 /me 详细信息。
+    // 这样 /me 失败(网络/CORS/服务端错误)不再阻塞登录流程。
     const login = useCallback(async (role: UserRole, authData?: any) => {
+        const routeMap: Record<UserRole, string> = {
+            [UserRole.PUBLIC]: '/public',
+            [UserRole.PROFESSIONAL]: '/professional',
+            [UserRole.ADMIN]: '/admin'
+        };
+        const prefix = getStoragePrefix(role);
+
+        // 1) 用 authData 中的最基本字段(目前 login 响应只保证 user_id)立即构造用户
+        const fallbackUser: User = {
+            id: authData?.user_id || 'unknown',
+            name: authData?.username || authData?.email || 'User',
+            role: role,
+            avatar: role === UserRole.PUBLIC
+                ? 'https://picsum.photos/id/64/200/200'
+                : 'https://picsum.photos/id/55/200/200',
+            base_profile: role === UserRole.PUBLIC ? {
+                constitution_type: 'Unknown',
+                taboo_items: [],
+                medical_history: 'None recorded',
+                family_history: 'None recorded',
+                allergy_info: 'None recorded',
+                merged_diseases: 'None recorded',
+            } : undefined,
+        };
+
+        setUser(fallbackUser);
+        localStorage.setItem(`${prefix}user`, JSON.stringify(fallbackUser));
+        navigate(routeMap[role]);
+
+        // 2) 后台异步拉取 /me 完整画像,失败时静默回退到 fallbackUser
         try {
-            // 根据角色获取用户详细信息
-            let userData: any;
-            if (role === UserRole.ADMIN) {
-                const response = await adminAuthApi.me();
-                userData = response.data;
-            } else {
-                const response = await authApi.getMe();
-                userData = response.data;
-            }
+            const response = role === UserRole.ADMIN
+                ? await adminAuthApi.me()
+                : await authApi.getMe();
+            const data = response?.data;
+            if (!data) return;
 
-            // 解析用户数据 (从 API 响应中获取)
-            const parseUser = (data: any, role: UserRole): User => {
-                return {
-                    id: data.id,
-                    name: data.username || data.email,
-                    role: role,
-                    avatar: data.avatar_url || (role === UserRole.PROFESSIONAL ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' : 'https://api.dicebear.com/7.x/avataaars/svg?seed=User'),
-                    base_profile: data.base_profile || undefined,
-                };
+            const enrichedUser: User = {
+                ...fallbackUser,
+                id: data.id || fallbackUser.id,
+                name: data.username || data.email || fallbackUser.name,
+                avatar: data.avatar_url
+                    || (role === UserRole.PROFESSIONAL
+                        ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix'
+                        : 'https://api.dicebear.com/7.x/avataaars/svg?seed=User'),
+                base_profile: data.base_profile || fallbackUser.base_profile,
             };
 
-            const loggedInUser = parseUser(userData, role);
-            setUser(loggedInUser);
-
-            // 使用角色前缀存储用户信息
-            const prefix = getStoragePrefix(role);
-            localStorage.setItem(`${prefix}user`, JSON.stringify(loggedInUser));
-
-            // 导航到相应页面
-            const routeMap: Record<UserRole, string> = {
-                [UserRole.PUBLIC]: '/public',
-                [UserRole.PROFESSIONAL]: '/professional',
-                [UserRole.ADMIN]: '/admin'
-            };
-            navigate(routeMap[role]);
-
-        } catch {
-            // 如果获取用户信息失败，使用基本信息
-            const basicUser: User = {
-                id: authData?.user_id || 'unknown',
-                name: 'User',
-                role: role,
-                avatar: role === UserRole.PUBLIC
-                    ? 'https://picsum.photos/id/64/200/200'
-                    : 'https://picsum.photos/id/55/200/200',
-                base_profile: role === UserRole.PUBLIC ? {
-                    constitution_type: 'Unknown',
-                    taboo_items: [],
-                    medical_history: 'None recorded',
-                    family_history: 'None recorded',
-                    allergy_info: 'None recorded',
-                    merged_diseases: 'None recorded',
-                } : undefined,
-            };
-            setUser(basicUser);
-
-            const prefix = getStoragePrefix(role);
-            localStorage.setItem(`${prefix}user`, JSON.stringify(basicUser));
-
-            const routeMap: Record<UserRole, string> = {
-                [UserRole.PUBLIC]: '/public',
-                [UserRole.PROFESSIONAL]: '/professional',
-                [UserRole.ADMIN]: '/admin'
-            };
-            navigate(routeMap[role]);
+            // 仅在值发生实质变化时更新,避免无意义的重渲染
+            setUser(prev => {
+                if (
+                    prev?.id === enrichedUser.id &&
+                    prev?.name === enrichedUser.name &&
+                    prev?.avatar === enrichedUser.avatar
+                ) {
+                    return prev;
+                }
+                return enrichedUser;
+            });
+            localStorage.setItem(`${prefix}user`, JSON.stringify(enrichedUser));
+        } catch (err) {
+            // /me 失败不影响登录流程,fallbackUser 已就位
+            console.warn('[Auth] 后台拉取 /me 失败,使用登录响应中的基础信息:', err);
         }
     }, [navigate]);
 

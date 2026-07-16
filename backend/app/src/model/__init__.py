@@ -37,6 +37,11 @@ from .system_models import (
 )
 from .model_config_models import (UserProviderConfig)
 
+# 病例库模型 (P2)
+from .case_models import (
+    Case, CaseSymptom, CaseSyndrome, CasePrescription, UserHealthProfile
+)
+
 __all__ = [
     # 用户相关
     # "User", "UserSession",  "UserActivity", "DeviceType", "ActivityType", "RefreshToken",
@@ -53,6 +58,9 @@ __all__ = [
 
     # 药材相关
     "Herb", "HerbInventory", "Prescription", "ClassicText",
+
+    # 病例库 (P2)
+    "Case", "CaseSymptom", "CaseSyndrome", "CasePrescription", "UserHealthProfile",
 
     # 系统相关
     "SystemConfig", "SystemStats", "DatabaseStats", "HealthCheck", "LogEntry",

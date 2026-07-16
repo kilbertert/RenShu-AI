@@ -1,4 +1,11 @@
-import time
+"""
+全局异常处理器
+
+注意：此处不再注册 @app.middleware("http") 形式的 BaseHTTPMiddleware。
+BaseHTTPMiddleware 在异常路径下会拦截响应并导致 CORS 头丢失。
+request_id / client_ip 已由 ResponseMiddleware (纯 ASGI) 统一处理。
+"""
+
 import uuid
 
 from fastapi import FastAPI
@@ -13,35 +20,14 @@ from app.src.utils import get_logger
 
 
 class GlobalReOrExHandler:
-    """"
+    """
     全局异常处理器
     """
 
-    def __init__(self,app:FastAPI):
-        self.app=app
-        self.register_request_handler()
+    def __init__(self, app: FastAPI):
+        self.app = app
         self.register_error_handler()
-        self.logger=get_logger("app")
-
-    def register_request_handler(self):
-        """
-                注册请求处理函数到FasstAPi中
-        """
-        @self.app.middleware("http")
-        async def add_request_context(request: Request, call_next):
-            """添加请求上下文中间件"""
-            # 生成请求ID
-            request_id = str(uuid.uuid4())
-            request_context.set_request_id(request_id)
-            # 记录请求开始时间
-
-            # 处理请求
-            response = await call_next(request)
-            # 记录处理时间
-            self.logger.info(f"请求处理完成: {request.method} {request.url.path}",
-                        )
-
-            return response
+        self.logger = get_logger("app")
 
     def register_error_handler(self):
         """

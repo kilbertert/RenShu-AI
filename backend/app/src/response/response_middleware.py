@@ -43,14 +43,30 @@ class ResponseMiddleware:
         scope["state"]["request_id"] = request_id
         scope["state"]["client_ip"] = client_ip
 
+        # 读取 Origin 请求头,供 send_wrapper 在响应时回写
+        request_headers = dict(scope.get("headers", []))
+        origin = request_headers.get(b"origin", b"").decode("latin-1") or "*"
+
         async def send_wrapper(message: Message) -> None:
-            """包装 send 函数，添加响应头"""
+            """包装 send 函数，添加响应头 + CORS 兜底"""
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
                 if request_id:
                     headers.append((b"x-request-id", request_id.encode()))
                 if client_ip:
                     headers.append((b"x-client-ip", client_ip.encode()))
+
+                # CORS 兜底：确保所有响应都带跨域头,避免异常路径下头丢失
+                existing_header_names = {h[0].lower() for h in headers}
+                if b"access-control-allow-origin" not in existing_header_names:
+                    headers.append((b"access-control-allow-origin", origin.encode("latin-1")))
+                if b"access-control-allow-methods" not in existing_header_names:
+                    headers.append((b"access-control-allow-methods", b"GET, POST, PUT, DELETE, OPTIONS, PATCH"))
+                if b"access-control-allow-headers" not in existing_header_names:
+                    headers.append((b"access-control-allow-headers", b"Authorization, Content-Type, X-Requested-With"))
+                if b"vary" not in existing_header_names:
+                    headers.append((b"vary", b"Origin"))
+
                 message = {**message, "headers": headers}
 
             elif message["type"] == "http.response.body":

@@ -62,16 +62,21 @@ const PublicLoginPage: React.FC<PublicLoginPageProps> = ({ onLogin }) => {
       
       // 显示成功提示
       setToast({ message: '登录成功！', type: 'success' });
-      
+
       // 小延迟让用户看到提示后再导航
       setTimeout(() => {
         onLogin(UserRole.PUBLIC, res.data);
       }, 100);
     } catch (err: any) {
       console.error(err);
-      setError(err.response?.data?.message || '登录失败');
+      // 后端返回 PascalCase (Message)，错误路径未被 interceptor 转换大小写
+      const errMsg = err.response?.data?.message
+                  || err.response?.data?.Message
+                  || err?.message
+                  || '登录失败';
+      setError(errMsg);
       // 显示错误提示
-      setToast({ message: err.response?.data?.message || '登录失败', type: 'error' });
+      setToast({ message: errMsg, type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -155,7 +160,16 @@ const PublicLoginPage: React.FC<PublicLoginPageProps> = ({ onLogin }) => {
             disabled={loading}
             className="w-full py-4 rounded-xl font-bold text-white shadow-lg transform transition active:scale-95 flex items-center justify-center gap-2 bg-tcm-darkGreen hover:bg-tcm-lightGreen disabled:opacity-50"
           >
-            {loading ? '正在登录...' : <>进入 <Icons.ChevronRight size={20}/></>}
+            <span className="inline-flex items-center gap-2 min-w-[3.5rem] justify-center">
+              {loading ? (
+                <span>正在登录...</span>
+              ) : (
+                <>
+                  <span>进入</span>
+                  <Icons.ChevronRight size={20} />
+                </>
+              )}
+            </span>
           </button>
 
           <div className="flex items-center justify-between text-sm mt-2">

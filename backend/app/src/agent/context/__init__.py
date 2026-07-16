@@ -6,7 +6,6 @@
 - CompressionStrategy: 压缩策略选择
 - TCMSummarizer: TCM 专用摘要
 - ToolTrimmer: 工具消息裁剪
-- HierarchicalMemory: 分层记忆
 """
 
 from .message_priority import (

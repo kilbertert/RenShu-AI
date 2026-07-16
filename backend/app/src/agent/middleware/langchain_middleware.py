@@ -375,6 +375,20 @@ def get_model_retry_middleware(
 #     )
 
 
+def get_summarization_middleware(
+    config: Optional[TCMLangChainMiddlewareConfig] = None
+):
+    """Summarization middleware stub.
+
+    原实现位于本文件上方（被 # 注释），启用时取消注释即可。
+    当前实现：未启用时返回 None，避免在导入链上抛错。
+    """
+    if config is None or not getattr(config, "enable_summarization", False):
+        return None
+    # TODO: 启用时切换到上方未注释的完整实现
+    return None
+
+
 # ============================================================
 # 统一获取所有 LangChain 中间件
 # ============================================================

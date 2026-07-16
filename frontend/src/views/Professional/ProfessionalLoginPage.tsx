@@ -127,7 +127,16 @@ const ProfessionalLoginPage: React.FC<ProfessionalLoginPageProps> = ({ onLogin }
             disabled={loading}
             className="w-full py-4 mt-2 font-bold text-tcm-darkGreen bg-tcm-gold hover:bg-white transition-colors flex items-center justify-center gap-2 rounded-none uppercase tracking-wide text-sm disabled:opacity-50"
           >
-            {loading ? '认证中...' : <> 登录 <Icons.ShieldPlus size={18}/></>}
+            <span className="inline-flex items-center gap-2 justify-center min-w-[3.5rem]">
+              {loading ? (
+                <span>认证中...</span>
+              ) : (
+                <>
+                  <span>登录</span>
+                  <Icons.ShieldPlus size={18} />
+                </>
+              )}
+            </span>
           </button>
 
           <div className="flex items-center justify-between text-sm mt-4">

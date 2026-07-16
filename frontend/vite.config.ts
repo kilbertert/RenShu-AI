@@ -8,6 +8,9 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        // Dev only: 允许任意 Host 头，便于 ngrok / localhost.run / Cloudflared 等内网穿透
+        // 生产环境不要这样写
+        allowedHosts: true,
       },
       plugins: [react()],
       define: {

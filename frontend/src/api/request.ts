@@ -3,10 +3,13 @@ import { convertKeysToSnake } from '../utils/camelToSnakeConverter';
 
 // 根据环境选择API基础URL
 const getBaseURL = (): string => {
-  if (import.meta.env.PROD) {
-    return import.meta.env.VITE_API_BASE_URL || 'https://your-production-server.com';
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
   }
-  return 'http://localhost:8000';
+  if (import.meta.env.PROD) {
+    return 'https://your-production-server.com';
+  }
+  return 'http://localhost:8091';
 };
 
 // Token 刷新状态管理

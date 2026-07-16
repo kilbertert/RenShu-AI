@@ -185,21 +185,22 @@ async def close_dbs():
 async def create_db_tables():
     """创建所有 SQLModel 表（如果不存在）"""
     # 导入模型以确保它们被注册到 SQLModel.metadata
-    # 从统一入口导入所有模型
     from app.src.model import (
-        UserProviderConfig
-        # 用户相关模型
-        # User, Patient, UserSession, UserState, UserActivity, RefreshToken,
-        # 对话相关模型
-        # Conversation, Message,
-        # # 医疗相关模型
-        # MedicalCase, Symptom, Syndrome, MedicalRecord, TongueAnalysis,
-        # PrescriptionRecommendation,
-        # # 药材相关模型
-        # Herb, HerbInventory, Prescription, ClassicText,
-        # # 系统相关模型
-        # SystemConfig, SystemStats, DatabaseStats, HealthCheck, LogEntry,
-        # AuditLog, BackupInfo, SystemInfo
+        # 用户/账户相关
+        UserProviderConfig,
+        Account, Patient, Doctor, Admin, AccountType, AccountRefreshToken, AccountActivity, UserState,
+        # 对话相关
+        Conversation, Message,
+        # 医疗相关
+        MedicalCase, Symptom, Syndrome, MedicalRecord, TongueAnalysis,
+        PrescriptionRecommendation,
+        # 药材相关
+        Herb, HerbInventory, Prescription, ClassicText,
+        # 病例库 (P2)
+        Case, CaseSymptom, CaseSyndrome, CasePrescription, UserHealthProfile,
+        # 系统相关
+        SystemConfig, SystemStats, DatabaseStats, HealthCheck, LogEntry,
+        AuditLog, BackupInfo, SystemInfo,
     )
 
     if async_db_manager.async_engine is None:

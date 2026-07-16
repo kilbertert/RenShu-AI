@@ -191,7 +191,7 @@ class TongueAnalysis(SQLModel, table=True):
     __tablename__ = "tongue_analysis"
     
     id: Optional[UUID] = Field(default_factory=uuid4, primary_key=True, description="分析ID")
-    user_id: Optional[UUID] = Field(foreign_key="users.id", description="用户ID")
+    user_id: Optional[UUID] = Field(foreign_key="accounts.id", description="用户ID")
     image_url: str = Field(max_length=255, description="舌苔图片URL")
     analysis_result: Optional[Dict[str, Any]] = Field(sa_column=Column(JSON,nullable= True,default={}), description="分析结果（JSON格式）")
     color_analysis: Optional[str] = Field(default=None, max_length=100, description="颜色分析")
@@ -232,7 +232,7 @@ class PrescriptionRecommendation(SQLModel, table=True):
     
     id: Optional[UUID] = Field(default_factory=uuid4, primary_key=True, description="推荐ID")
     case_id: Optional[UUID] = Field(default_factory=uuid4, foreign_key="medical_cases.id", description="关联病例ID")
-    user_id: Optional[UUID] = Field(foreign_key="users.id", description="用户ID")
+    user_id: Optional[UUID] = Field(foreign_key="accounts.id", description="用户ID")
     prescription_id: Optional[UUID] = Field(default_factory=uuid4, foreign_key="prescriptions.id", description="推荐方剂ID")
     prescription_name: str = Field(max_length=100, description="方剂名称")
     syndrome_type: Optional[str] = Field(default=None, max_length=100, description="对应证型")

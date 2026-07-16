@@ -298,28 +298,15 @@ async def synthesize_diagnosis(state: ModerateState) -> Dict[str, Any]:
 # ============== 查询函数（与原版相同） ==============
 
 async def _query_similar_syndromes(collected_info: CollectedDiagnoseInfo) -> List[Dict[str, Any]]:
-    """查询相似证型（预定义 Cypher）"""
+    """查询相似证型（Neo4j 知识图谱）。
+
+    委托到主模块实现以避免代码漂移（多策略 HPO 桥接，
+    详见 moderate_diagnosis.py）。
+    """
     import asyncio
-    # TODO: 实现知识图谱查询
-    symptoms = collected_info.get_all_symptoms()
-    if not symptoms:
-        return []
-
-    # 模拟网络延迟
-    await asyncio.sleep(0.5)
-
-    return [
-        {
-            "name": "气虚证",
-            "symptoms": ["乏力", "气短", "自汗"],
-            "similarity": 0.8,
-        },
-        {
-            "name": "脾气虚证",
-            "symptoms": ["乏力", "食欲不振", "便溏"],
-            "similarity": 0.7,
-        },
-    ]
+    from .moderate_diagnosis import _query_similar_syndromes as _impl
+    await asyncio.sleep(0)
+    return await _impl(collected_info)
 
 
 async def _query_similar_cases(collected_info: CollectedDiagnoseInfo) -> List[Dict[str, Any]]:
@@ -340,18 +327,13 @@ async def _query_similar_cases(collected_info: CollectedDiagnoseInfo) -> List[Di
 
 
 async def _query_related_prescriptions(collected_info: CollectedDiagnoseInfo) -> List[Dict[str, Any]]:
-    """查询常用方剂（知识图谱）"""
-    import asyncio
-    # TODO: 实现知识图谱查询
-    await asyncio.sleep(0.6)
+    """查询常用方剂（Neo4j 知识图谱）。
 
-    return [
-        {
-            "name": "补中益气汤",
-            "indication": "脾胃气虚",
-            "composition": ["黄芪", "人参", "白术", "甘草"],
-        },
-    ]
+    委托到主模块实现以避免代码漂移（ITCM Formula 主数据源 +
+    tcm_graph 旧 Prescription 兜底，详见 moderate_diagnosis.py）。
+    """
+    from .moderate_diagnosis import _query_related_prescriptions as _impl
+    return await _impl(collected_info)
 
 
 # ============== 格式化函数 ==============

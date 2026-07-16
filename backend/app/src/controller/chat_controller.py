@@ -6,7 +6,7 @@ from app.src.dependencies.dependency import ChatServiceDep
 from app.src.schema.chat_schema import ChatRequest, PersonaAnalysisRequest, ChatResumeRequest
 from app.src.utils import get_logger
 
-from backend.app.src.response.utils import success_200
+from app.src.response.utils import success_200
 
 router = APIRouter(prefix="/api/v1/chat", tags=["聊天模块"])
 

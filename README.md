@@ -256,8 +256,3 @@ uvicorn.run(
 5. **权威资源联动**：集成国家中医药管理局数据库、中医院平台，支持实时查标准、挂门诊；
 6. **个性化养生指导**：根据用户体质、季节生成养生方案（食疗、穴位、生活建议）。
 
-## 项目链接
-
-GitHub 地址：https://github.com/yanlinPeng-code/SmartTCM-Agent
-
-License：MIT（医疗场景使用需遵守相关法规，建议结合专业医师审核）

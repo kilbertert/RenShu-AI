@@ -111,6 +111,14 @@ def create_diagnose_graph():
     workflow.add_edge("moderate_diagnosis", END)
     workflow.add_edge("complex_diagnosis", END)  # DeepSearch Agent
 
+    # P2: 诊断完成后落库病例（fire-and-forget，不影响 END）
+    from .nodes.save_case import save_case_node  # noqa: E402
+    workflow.add_node("save_case", save_case_node)
+    workflow.add_edge("simple_diagnosis", "save_case")
+    workflow.add_edge("moderate_diagnosis", "save_case")
+    workflow.add_edge("complex_diagnosis", "save_case")
+    workflow.add_edge("save_case", END)
+
     # 编译子图
     return workflow.compile()
 

@@ -641,7 +641,7 @@ const ProfessionalPortal: React.FC<ProPortalProps> = ({ user, onLogout }) => {
 
       {/* Main Content Area - Conditional Rendering */}
       {activeTab === 'ai-diagnosis' ? (
-        <div className="flex-1 flex overflow-hidden relative">
+        <div className="flex-1 min-h-0 flex overflow-hidden relative">
 
           {/* 2. Collapsible History Sidebar */}
            <div className={`bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col transition-all duration-300 ease-in-out ${showHistory ? 'w-64 opacity-100' : 'w-0 opacity-0 overflow-hidden'}`}>
@@ -716,7 +716,7 @@ const ProfessionalPortal: React.FC<ProPortalProps> = ({ user, onLogout }) => {
            </div>
 
           {/* 3. Main Workspace (Right) - Chat Interface */}
-          <main className="flex-1 flex flex-col bg-white dark:bg-gray-800 min-w-0 relative transition-colors">
+          <main className="flex-1 min-h-0 flex flex-col bg-white dark:bg-gray-800 min-w-0 relative transition-colors">
             {/* Header */}
             <header className="h-16 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between px-6 bg-white dark:bg-gray-800 z-10 transition-colors">
               <div className="flex items-center gap-3">
@@ -816,7 +816,7 @@ const ProfessionalPortal: React.FC<ProPortalProps> = ({ user, onLogout }) => {
             </header>
 
             {/* Chat Area */}
-            <div className="flex-1 overflow-y-auto p-6 bg-[#f8f9fa] dark:bg-[#121825] transition-colors">
+            <div className="flex-1 min-h-0 overflow-y-auto p-6 bg-[#f8f9fa] dark:bg-[#121825] transition-colors">
               <div className="max-w-4xl mx-auto w-full space-y-6">
                 {activeSession.messages.map((msg) => (
                   <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>

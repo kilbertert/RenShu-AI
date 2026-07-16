@@ -941,5 +941,99 @@ EXECUTE FUNCTION update_case_status();
 -- 为 herbs 表创建全文搜索索引
 CREATE INDEX idx_herbs_content_gin ON herbs USING gin(to_tsvector('english', COALESCE(name,'') || ' ' || COALESCE(effect,'') || ' ' || COALESCE(indication,'')));
 
+-- ============================================================
+-- P2 阶段：病例库结构化 (case library structuring)
+-- ============================================================
+
+-- 19. 病例主表 (cases)
+CREATE TABLE cases (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL,
+    thread_id VARCHAR(100),
+    chief_complaint TEXT NOT NULL,
+    complexity_level VARCHAR(20) CHECK (complexity_level IN ('simple','moderate','complex')),
+    syndrome_id VARCHAR(50),
+    syndrome_name VARCHAR(100),
+    syndrome_confidence DECIMAL(3,2),
+    diagnosis_text TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX idx_cases_user_id ON cases(user_id);
+CREATE INDEX idx_cases_created_at ON cases(created_at DESC);
+CREATE INDEX idx_cases_syndrome_name ON cases(syndrome_name);
+
+-- 20. 病例-症状关联 (case_symptoms)
+CREATE TABLE case_symptoms (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    symptom_name VARCHAR(100) NOT NULL,
+    category VARCHAR(50),
+    severity SMALLINT CHECK (severity BETWEEN 1 AND 5)
+);
+CREATE INDEX idx_case_symptoms_case_id ON case_symptoms(case_id);
+CREATE INDEX idx_case_symptoms_name ON case_symptoms(symptom_name);
+
+-- 21. 病例-证型多对多 (case_syndromes)
+CREATE TABLE case_syndromes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    syndrome_name VARCHAR(100) NOT NULL,
+    confidence DECIMAL(3,2) CHECK (confidence BETWEEN 0 AND 1),
+    is_primary BOOLEAN DEFAULT FALSE
+);
+CREATE INDEX idx_case_syndromes_case_id ON case_syndromes(case_id);
+CREATE INDEX idx_case_syndromes_primary ON case_syndromes(case_id) WHERE is_primary = TRUE;
+
+-- 22. 病例-推荐方剂 (case_prescriptions)
+CREATE TABLE case_prescriptions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    prescription_name VARCHAR(100) NOT NULL,
+    composition TEXT,
+    usage TEXT,
+    source VARCHAR(200),
+    recommendation_rank SMALLINT DEFAULT 1
+);
+CREATE INDEX idx_case_prescriptions_case_id ON case_prescriptions(case_id);
+
+-- 23. 用户健康档案聚合 (user_health_profiles)
+CREATE TABLE user_health_profiles (
+    user_id UUID PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+    constitution VARCHAR(50),
+    chronic_conditions JSON,
+    allergies JSON,
+    last_case_at TIMESTAMP,
+    total_cases INTEGER DEFAULT 0,
+    most_common_syndrome VARCHAR(100),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 触发器：cases 插入/更新时刷新 user_health_profiles.total_cases
+CREATE OR REPLACE FUNCTION refresh_user_health_profile()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO user_health_profiles (user_id, total_cases, last_case_at, updated_at)
+    SELECT NEW.user_id, COUNT(*), MAX(created_at), NOW()
+    FROM cases WHERE user_id = NEW.user_id
+    ON CONFLICT (user_id) DO UPDATE SET
+        total_cases = EXCLUDED.total_cases,
+        last_case_at = EXCLUDED.last_case_at,
+        most_common_syndrome = (
+            SELECT syndrome_name FROM cases
+            WHERE user_id = NEW.user_id AND syndrome_name IS NOT NULL
+            GROUP BY syndrome_name ORDER BY COUNT(*) DESC LIMIT 1
+        ),
+        updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER refresh_user_health_profile_trigger
+AFTER INSERT OR UPDATE ON cases
+FOR EACH ROW
+EXECUTE FUNCTION refresh_user_health_profile();
+
 -- 完成数据库初始化
 SELECT 'SmartTCM-Agent PostgreSQL 数据库初始化完成！' as message;

@@ -70,3 +70,15 @@ def get_chat_service(
 ChatServiceDep=Annotated[ChatService,Depends(get_chat_service)]
 LanguageModelServiceDep=Annotated[LanguageModelService,Depends(get_model_service)]
 ConversationServiceDep=Annotated[ConversationService,Depends(get_conversation_service)]
+
+
+# P2: 病例库服务依赖
+def get_case_service(
+        session: AsyncSession = Depends(get_db),
+):
+    """获取病例库服务实例"""
+    from app.src.service.case_service import CaseService
+    return CaseService(session=session)
+
+
+CaseServiceDep = Annotated["CaseService", Depends(get_case_service)]

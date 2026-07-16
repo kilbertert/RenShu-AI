@@ -298,28 +298,49 @@ async def synthesize_diagnosis(state: ModerateState) -> Dict[str, Any]:
 # ============== 查询函数（与原版相同） ==============
 
 async def _query_similar_syndromes(collected_info: CollectedDiagnoseInfo) -> List[Dict[str, Any]]:
-    """查询相似证型（预定义 Cypher）"""
+    """查询相似证型（Neo4j 知识图谱）。
+
+    图谱关系假设：(Symptom)-[:INDICATES]->(Syndrome)
+    Neo4j 不可用时返回空列表，由上层 LLM 自行降级到"仅基于症状推理"。
+    """
     import asyncio
-    # TODO: 实现知识图谱查询
     symptoms = collected_info.get_all_symptoms()
     if not symptoms:
         return []
 
-    # 模拟网络延迟
-    await asyncio.sleep(0.5)
+    try:
+        from app.src.core.graph_db import get_neo4j_graph
+    except ImportError as exc:
+        logger.warning("graph_db 模块不可用: %s", exc)
+        await asyncio.sleep(0)
+        return []
 
-    return [
-        {
-            "name": "气虚证",
-            "symptoms": ["乏力", "气短", "自汗"],
-            "similarity": 0.8,
-        },
-        {
-            "name": "脾气虚证",
-            "symptoms": ["乏力", "食欲不振", "便溏"],
-            "similarity": 0.7,
-        },
-    ]
+    graph = get_neo4j_graph(database="tcm_graph")
+    if graph is None:
+        logger.warning("Neo4j 不可用，跳过证型查询")
+        await asyncio.sleep(0)
+        return []
+
+    cypher = """
+    MATCH (s:Symptom)-[r:INDICATES]->(sy:Syndrome)
+    WHERE s.name IN $symptoms
+    RETURN sy.name AS syndrome,
+           count(r) AS match_count,
+           collect(s.name) AS matched_symptoms
+    ORDER BY match_count DESC
+    LIMIT $top_k
+    """
+
+    try:
+        result = graph.query(
+            cypher,
+            params={"symptoms": symptoms, "top_k": 5},
+        )
+    except Exception as exc:
+        logger.error("证型查询失败: %s", exc)
+        return []
+
+    return [dict(record) for record in result]
 
 
 async def _query_similar_cases(collected_info: CollectedDiagnoseInfo) -> List[Dict[str, Any]]:
@@ -340,18 +361,48 @@ async def _query_similar_cases(collected_info: CollectedDiagnoseInfo) -> List[Di
 
 
 async def _query_related_prescriptions(collected_info: CollectedDiagnoseInfo) -> List[Dict[str, Any]]:
-    """查询常用方剂（知识图谱）"""
-    import asyncio
-    # TODO: 实现知识图谱查询
-    await asyncio.sleep(0.6)
+    """查询常用方剂（Neo4j 知识图谱）。
 
-    return [
-        {
-            "name": "补中益气汤",
-            "indication": "脾胃气虚",
-            "composition": ["黄芪", "人参", "白术", "甘草"],
-        },
-    ]
+    图谱关系假设：(Prescription)-[:TREATS]->(Syndrome)
+    Neo4j 不可用时返回空列表，由上层 LLM 自行降级。
+    """
+    import asyncio
+    try:
+        from app.src.core.graph_db import get_neo4j_graph
+    except ImportError as exc:
+        logger.warning("graph_db 模块不可用: %s", exc)
+        return []
+
+    graph = get_neo4j_graph(database="tcm_graph")
+    if graph is None:
+        logger.warning("Neo4j 不可用，跳过方剂查询")
+        return []
+
+    syndromes = collected_info.get_all_syndromes() if hasattr(collected_info, "get_all_syndromes") else []
+    if not syndromes:
+        return []
+
+    cypher = """
+    MATCH (p:Prescription)-[:TREATS]->(sy:Syndrome {name: $syndrome})
+    RETURN p.name AS prescription,
+           p.composition AS composition,
+           p.usage AS usage
+    LIMIT $top_k
+    """
+
+    results: List[Dict[str, Any]] = []
+    for syndrome in syndromes:
+        try:
+            rows = graph.query(
+                cypher,
+                params={"syndrome": syndrome, "top_k": 5},
+            )
+        except Exception as exc:
+            logger.error("方剂查询失败 (syndrome=%s): %s", syndrome, exc)
+            continue
+        results.extend(dict(row) for row in rows)
+
+    return results
 
 
 # ============== 格式化函数 ==============

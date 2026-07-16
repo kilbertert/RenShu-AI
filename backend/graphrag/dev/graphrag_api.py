@@ -97,7 +97,10 @@ from graphrag.storage.file_pipeline_storage import FilePipelineStorage
 # ========================================
 
 # GraphRAG项目根目录路径
-PROJECT_DIR = "D:\code\SmartTCM-Agent-SYSTEM\graphrag"
+# 优先使用环境变量 GRAPHRAG_PROJECT_DIR；否则取脚本所在目录的上一级（graphrag 根）
+_THIS_FILE = Path(__file__).resolve()
+_DEFAULT_PROJECT_DIR = _THIS_FILE.parent.parent
+PROJECT_DIR = os.environ.get("GRAPHRAG_PROJECT_DIR") or str(_DEFAULT_PROJECT_DIR)
 
 # 数据目录名称（相对于项目根目录）
 DATA_DIR_NAME = "data"

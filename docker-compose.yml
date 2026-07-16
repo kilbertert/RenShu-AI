@@ -2,6 +2,49 @@ version: '3.8'
 
 services:
   # ============================================
+  # PostgreSQL - 患者、病例、账户等结构化数据
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: tcm-postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=tcm_agent_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=tcm_pg_2026
+    networks:
+      - tcm_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tcm_agent_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Redis - 缓存（用户配置、模型信息、API Key）
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: tcm-redis
+    ports:
+      - "6390:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - tcm_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
   # Qdrant 向量数据库 - 用于Mem0的语义检索
   # ============================================
   qdrant:
@@ -46,6 +89,10 @@ services:
       retries: 5
 
 volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
   qdrant_data:
     driver: local
   neo4j_data:

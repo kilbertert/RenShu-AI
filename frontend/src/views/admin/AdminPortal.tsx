@@ -1019,7 +1019,7 @@ const AdminPortal: React.FC<AdminPortalProps> = ({ user, onLogout }) => {
       </aside>
 
       {/* 主内容区 */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-x-hidden">
         <header className="h-20 border-b border-slate-800 bg-slate-950/50 backdrop-blur-xl flex items-center justify-between px-8 sticky top-0 z-40 transition-colors">
            <div className="flex items-center gap-4">
               <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-500 hover:text-white transition-colors">

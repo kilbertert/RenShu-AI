@@ -150,6 +150,7 @@ def _get_langchain_class(provider_name: str) -> type:
 def get_langchain_llm(
     provider_name: str = "openai",
     model: str = "gpt-4o-mini",
+    model_name: Optional[str] = None,
     api_key: str = "",
     base_url: Optional[str] = None,
     temperature: float = 0.7,
@@ -189,6 +190,10 @@ def get_langchain_llm(
         ValueError: 不支持的提供商
     """
     provider_key = provider_name.lower()
+
+    # model_name 优先于 model（兼容老调用方同时传两个参数的情况）
+    if model_name:
+        model = model_name
 
     # 如果没有提供 base_url，使用默认值
     if not base_url:
@@ -332,6 +337,7 @@ def get_langchain_llm(
 def get_intent_classifier_llm(
     provider_name: str = "openai",
     model: str = "gpt-4o-mini",
+    model_name: str = "gpt-4o-mini",
     api_key: str = "",
     base_url: Optional[str] = None,
     top_p:Optional[str|int|float]=None,
@@ -353,7 +359,7 @@ def get_intent_classifier_llm(
     """
     return get_langchain_llm(
         provider_name=provider_name,
-        model=model,
+        model=model_name or model,
         api_key=api_key,
         base_url=base_url,
         top_p=top_p,

@@ -7,7 +7,7 @@ from app.src.response.exception.global_exception import GlobalReOrExHandler
 from app.src.common.config.prosgresql_config import async_db_manager
 from app.src.response.response_middleware import ResponseMiddleware
 from app.src.utils import get_logger
-from app.src.controller import account_router, model_config_router, chat_router, conversation_router, tongue_analysis_router
+from app.src.controller import account_router, model_config_router, chat_router, conversation_router, tongue_analysis_router, case_router
 from app.src.middleware.auth_middleware import AuthContextMiddleware
 
 from app.src.common.config.prosgresql_config import create_db_tables
@@ -20,16 +20,73 @@ from app.src.common.config.llm_client_pool import llm_client_pool
 logger = get_logger("app")
 
 
+# 🐛 TEMP DEBUG: 拦截 httpx 发往 LLM API 的请求体，用于排查 DeepSeek 400
+def _install_llm_http_debug():
+    try:
+        import httpx
+        import json as _json
+        orig_send = httpx.AsyncClient.send
+
+        async def _patched_send(self, request, *args, **kwargs):
+            url = str(request.url)
+            if "deepseek" in url or "openai" in url or "dashscope" in url or "bigmodel" in url:
+                body_preview = ""
+                if request.content:
+                    try:
+                        body_preview = _json.dumps(_json.loads(request.content), ensure_ascii=False)[:8000]
+                    except Exception:
+                        body_preview = request.content[:500].decode("utf-8", errors="replace")
+                logger.warning(
+                    f"[LLM-HTTP-DEBUG] {request.method} {url} | body={body_preview}"
+                )
+            resp = await orig_send(self, request, *args, **kwargs)
+            if "deepseek" in url or "openai" in url:
+                # Capture response body for error responses to diagnose
+                resp_body = b""
+                try:
+                    resp_body = await resp.aread()
+                    try:
+                        resp_body_text = resp_body.decode("utf-8", errors="replace")[:2000]
+                    except Exception:
+                        resp_body_text = str(resp_body)[:500]
+                    logger.warning(
+                        f"[LLM-HTTP-DEBUG] <- {resp.status_code} {url} | resp={resp_body_text}"
+                    )
+                    # Reconstruct response so downstream can still use it
+                    import httpx as _httpx
+                    resp = _httpx.Response(
+                        status_code=resp.status_code,
+                        headers=resp.headers,
+                        content=resp_body,
+                        request=request,
+                    )
+                except Exception as _e:
+                    logger.warning(f"[LLM-HTTP-DEBUG] resp capture failed: {_e}")
+            return resp
+
+        httpx.AsyncClient.send = _patched_send
+        logger.warning("[LLM-HTTP-DEBUG] httpx interceptor installed")
+    except Exception as e:
+        logger.warning(f"[LLM-HTTP-DEBUG] install failed: {e}")
+
+
+_install_llm_http_debug()
+
+
 
 
 
 
 
 def add_middleware(app: FastAPI):
+    # CORS 配置:前端使用 Bearer token 而非 cookie,无需 allow_credentials=True。
+    # 之前 allow_origins=["*"] + allow_credentials=True 是 CORS 规范禁止的组合,
+    # 浏览器会在 Access-Control-Allow-Credentials: true + Access-Control-Allow-Origin: *
+    # 时直接拒绝跨域响应。ResponseMiddleware 已对每个响应补全 CORS 头作为兜底。
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"]
     )
@@ -127,6 +184,7 @@ async def register_router(app:FastAPI):
     app.include_router(chat_router)
     app.include_router(conversation_router)
     app.include_router(tongue_analysis_router)
+    app.include_router(case_router)  # P2 病例库
 
     logger.info("注册路由完成")
 

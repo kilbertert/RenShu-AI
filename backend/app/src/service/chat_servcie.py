@@ -12,7 +12,7 @@ from app.src.service.conversation_service import ConversationService
 from app.src.service.language_model_service import LanguageModelService
 from app.src.common.decorators import require_login
 from app.src.common.context import get_current_user_id
-from backend.app.src.worker.tasks import update_base_profile_task
+from app.src.worker.tasks import update_base_profile_task
 from uuid import UUID
 from app.src.common.config.redis_config import redis_manager
 from app.src.utils import get_logger
@@ -369,12 +369,20 @@ class ChatService:
         from app.src.utils.auth_utils import decrypt_api_key
 
         try:
-            provider_id = UUID(model_configuration.provider_id)
+            raw_provider_id = model_configuration.provider_id
 
-            # 1. 获取供应商信息
-            provider = await self.model_service.model_config_service.provider_service.get(provider_id)
+            # 1. 解析 provider：优先按 UUID 查，失败则按 name 查
+            provider = None
+            try:
+                provider_id = UUID(raw_provider_id)
+                provider = await self.model_service.model_config_service.provider_service.get(provider_id)
+            except (ValueError, TypeError):
+                # 不是 UUID，按 name 查
+                provider = await self.model_service.model_config_service.provider_service.get_provider_by_name(raw_provider_id)
+                if provider:
+                    provider_id = provider.id
             if not provider:
-                logger.warning(f"供应商不存在: {provider_id}")
+                logger.warning(f"供应商不存在: {raw_provider_id}")
                 return {}
 
             # 2. 获取用户配置（API Key, Base URL）

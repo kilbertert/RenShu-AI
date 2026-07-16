@@ -21,8 +21,8 @@ from app.src.utils import get_logger
 
 from app.src.service.language_model_service import ModelProviderService
 
-from backend.app.src.dependencies.dependency import get_model_config_service
-from backend.app.src.service.language_model_service import ModelConfigService
+from app.src.dependencies.dependency import get_model_config_service
+from app.src.service.language_model_service import ModelConfigService
 
 router = APIRouter(prefix="/api/v1", tags=["模型配置"])
 logger = get_logger("model_config_controller")
