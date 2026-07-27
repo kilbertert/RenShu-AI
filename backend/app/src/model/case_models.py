@@ -27,6 +27,21 @@ class Case(SQLModel, table=True):
     syndrome_name: Optional[str] = Field(default=None, max_length=100, description="证型中文名")
     syndrome_confidence: Optional[float] = Field(default=None, description="辨证置信度 0-1")
     diagnosis_text: Optional[str] = Field(default=None, description="完整辨证文本")
+    diagnosis_payload: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="完整结构化辨证结果",
+    )
+    tongue_analysis: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="本次病例使用的结构化舌像证据",
+    )
+    report_analysis: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="本次病例使用的结构化医疗报告证据",
+    )
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 

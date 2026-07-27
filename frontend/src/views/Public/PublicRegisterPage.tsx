@@ -65,9 +65,13 @@ const PublicRegisterPage: React.FC<PublicRegisterPageProps> = ({ onRegisterSucce
         navigate('/login/public');
       }, 150);
     } catch (err: any) {
-      setError(err.response?.data?.message || '注册失败');
-      // 显示错误提示
-      setToast({ message: err.response?.data?.message || '注册失败', type: 'error' });
+      const errMsg = err.response?.data?.message
+                  || err.response?.data?.Message
+                  || (err.code === 'ERR_NETWORK' ? '无法连接服务器，请刷新页面后重试' : '')
+                  || err?.message
+                  || '注册失败';
+      setError(errMsg);
+      setToast({ message: errMsg, type: 'error' });
     } finally {
       setLoading(false);
     }

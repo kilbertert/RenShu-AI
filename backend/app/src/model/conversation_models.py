@@ -27,6 +27,14 @@ class Conversation(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
+    # 服务端持有的 LangGraph 线程身份。客户端不得自行绑定或替换。
+    agent_thread_id: UUID = Field(default_factory=uuid4, description="LangGraph持久线程ID")
+    agent_interrupt: Optional[Dict[str, Any]] = Field(
+        sa_column=Column(JSON, nullable=True),
+        default=None,
+        description="待恢复的中断问题与动作",
+    )
+
     # Session Persona Metadata (Real-time)
     # Stores: chief_complaint, diagnosis, treatment, etc.
     session_metadata: Optional[Dict[str, Any]] = Field(sa_column=Column(JSON, nullable=True), default=None, description="会话画像元数据")
@@ -43,6 +51,7 @@ class Conversation(SQLModel, table=True):
         Index("idx_conversations_session_id", "session_id"),
         Index("idx_conversations_conversation_type", "conversation_type"),
         Index("idx_conversations_status", "status"),
+        Index("idx_conversations_agent_thread_id", "agent_thread_id", unique=True),
         Index("idx_conversations_created_at", "created_at"),
         {"extend_existing": True}
     )
@@ -137,6 +146,5 @@ class Message(SQLModel, table=True):
             except (json.JSONDecodeError, TypeError):
                 return {}
         return {}
-
 
 

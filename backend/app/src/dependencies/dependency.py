@@ -7,6 +7,7 @@ from app.src.service.chat_servcie import ChatService
 from app.src.service.conversation_service import ConversationService
 from app.src.service.language_model_service import LanguageModelService
 from app.src.service.language_model_service import ModelProviderService, ModelConfigService
+from app.src.service.attachment_service import AttachmentService
 
 from app.src.common.config.prosgresql_config import get_db
 
@@ -70,6 +71,16 @@ def get_chat_service(
 ChatServiceDep=Annotated[ChatService,Depends(get_chat_service)]
 LanguageModelServiceDep=Annotated[LanguageModelService,Depends(get_model_service)]
 ConversationServiceDep=Annotated[ConversationService,Depends(get_conversation_service)]
+
+
+def get_attachment_service(
+        session: AsyncSession = Depends(get_db),
+        conversation_service: ConversationService = Depends(get_conversation_service),
+) -> AttachmentService:
+    return AttachmentService(session=session, conversation_service=conversation_service)
+
+
+AttachmentServiceDep = Annotated[AttachmentService, Depends(get_attachment_service)]
 
 
 # P2: 病例库服务依赖

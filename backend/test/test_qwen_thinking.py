@@ -20,8 +20,8 @@ except ImportError:
     sys.exit(1)
 
 # 直接使用提供的 API Key 和 Base URL
-QWEN_API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-QWEN_BASE_URL = "https://www.dmxapi.cn/v1"
+QWEN_API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+QWEN_BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 print(f"Qwen API Key: {QWEN_API_KEY[:10]}...")
 print(f"Qwen Base URL: {QWEN_BASE_URL}")

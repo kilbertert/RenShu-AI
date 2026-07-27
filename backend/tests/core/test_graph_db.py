@@ -18,12 +18,14 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+from app.src.agent import tcm_neo4j
 from app.src.core import graph_db
 
 
 def _reset_graph_db_cache() -> None:
     """重置 graph_db 模块的 lru_cache。"""
     graph_db.get_neo4j_graph.cache_clear()
+    tcm_neo4j.get_tcm_neo4j_connection.cache_clear()
 
 
 # graph_db.py 暴露了独立的 get_connection() 工厂函数用于测试注入。
@@ -155,8 +157,6 @@ class TestEnvironmentConfiguration(unittest.TestCase):
             if not k.startswith("NEO4J_")
         }
         with patch.dict(os.environ, env_without_neo4j, clear=True):
-            from app.src.agent import tcm_neo4j
-
             tcm_neo4j.TCMNeo4jConnection._instance = None
             tcm_neo4j.TCMNeo4jConnection._graph = None
             _reset_graph_db_cache()

@@ -75,8 +75,12 @@ async def web_search(
         return {"results": results}
         
     except Exception as e:
-        logger.warning(f"网络搜索失败: {e}，使用模拟数据")
-        return {"results": _get_mock_web_results(query)}
+        logger.warning("真实网络搜索不可用: %s", e)
+        return {
+            "results": [],
+            "available": False,
+            "reason": "未配置可信网络检索服务，未返回模拟网页。",
+        }
 
 
 @tool
@@ -144,8 +148,12 @@ async def medical_research_search(
         return {"papers": papers}
         
     except Exception as e:
-        logger.warning(f"医学文献搜索失败: {e}，使用模拟数据")
-        return {"papers": _get_mock_papers(query)}
+        logger.warning("真实医学文献搜索不可用: %s", e)
+        return {
+            "papers": [],
+            "available": False,
+            "reason": "未配置可信医学文献检索服务，未返回模拟论文。",
+        }
 
 
 def _detect_database(url: str) -> str:
@@ -158,48 +166,3 @@ def _detect_database(url: str) -> str:
         return "wanfang"
     else:
         return "other"
-
-
-def _get_mock_web_results(query: str) -> List[Dict]:
-    """生成模拟的网络搜索结果"""
-    return [
-        {
-            "title": f"中医辨证论治{query}的临床研究进展",
-            "url": "https://example.com/article1",
-            "content": f"本文综述了近年来中医对{query}的辨证论治研究进展，"
-                       f"总结了常见证型和治疗方法，为临床提供参考。",
-            "score": 0.85
-        },
-        {
-            "title": f"{query}的中西医结合治疗策略",
-            "url": "https://example.com/article2",
-            "content": f"探讨{query}的中西医结合治疗方案，分析其优势和注意事项。",
-            "score": 0.78
-        },
-        {
-            "title": f"基于数据挖掘的{query}证型分布规律研究",
-            "url": "https://example.com/article3",
-            "content": f"运用数据挖掘技术分析{query}的证型分布规律及用药特点。",
-            "score": 0.72
-        }
-    ]
-
-
-def _get_mock_papers(query: str) -> List[Dict]:
-    """生成模拟的医学文献数据"""
-    return [
-        {
-            "title": f"Traditional Chinese Medicine Treatment of {query}: A Systematic Review",
-            "authors": "Zhang, Y., Li, X., Wang, J.",
-            "abstract": f"This systematic review evaluates the efficacy of TCM for {query}...",
-            "year": 2025,
-            "database": "pubmed"
-        },
-        {
-            "title": f"{query}的中医证型分布及用药规律研究",
-            "authors": "李明, 王芳, 张华",
-            "abstract": f"目的：探讨{query}的中医证型分布规律及临床用药特点。方法：回顾性分析...",
-            "year": 2024,
-            "database": "cnki"
-        }
-    ]

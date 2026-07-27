@@ -3,6 +3,7 @@ from typing import Optional, AsyncGenerator, Generator, Annotated
 from fastapi import Depends
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy import text
 from sqlalchemy.orm import (
     declarative_base,
     sessionmaker,
@@ -52,7 +53,13 @@ class PostgreSQLAsyncSessionManager:
             }
         )
         logger.info(f"--------------PostgreSQL异步引擎创建成功 (连接池={optimized_pool_size}, 溢出={optimized_max_overflow})----------------")
-        print(f"异步连接URL: {settings.async_connection_url}")
+        logger.info(
+            "PostgreSQL 目标: host=%s port=%s database=%s user=%s",
+            settings.POSTGRESQL_HOST,
+            settings.POSTGRESQL_PORT,
+            settings.POSTGRESQL_DATABASE_NAME,
+            settings.POSTGRESQL_USER_NAME,
+        )
 
         self.async_session_factory = async_sessionmaker(
             bind=self.async_engine,
@@ -190,7 +197,7 @@ async def create_db_tables():
         UserProviderConfig,
         Account, Patient, Doctor, Admin, AccountType, AccountRefreshToken, AccountActivity, UserState,
         # 对话相关
-        Conversation, Message,
+        Conversation, Message, ChatAttachment,
         # 医疗相关
         MedicalCase, Symptom, Syndrome, MedicalRecord, TongueAnalysis,
         PrescriptionRecommendation,
@@ -209,6 +216,32 @@ async def create_db_tables():
     async with async_db_manager.async_engine.begin() as conn:
         # 使用 checkfirst 参数只创建不存在的表，避免重复创建
         await conn.run_sync(lambda sync_conn: SQLModel.metadata.create_all(sync_conn, checkfirst=True))
+        # create_all 不会为既有表补列；以下迁移幂等地补齐持久会话字段。
+        await conn.execute(text(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS agent_thread_id UUID"
+        ))
+        await conn.execute(text(
+            "UPDATE conversations SET agent_thread_id = id WHERE agent_thread_id IS NULL"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE conversations ALTER COLUMN agent_thread_id SET NOT NULL"
+        ))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_agent_thread_id "
+            "ON conversations (agent_thread_id)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS agent_interrupt JSONB"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE cases ADD COLUMN IF NOT EXISTS diagnosis_payload JSONB"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE cases ADD COLUMN IF NOT EXISTS tongue_analysis JSONB"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE cases ADD COLUMN IF NOT EXISTS report_analysis JSONB"
+        ))
         logger.info("数据库表创建/检查完成")
 
 

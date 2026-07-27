@@ -6,10 +6,11 @@ TCMBank 公开数据（3 个 xlsx + 41,812 个 mol2 分子结构文件）。
 （mol2 是分子结构描述符，需 RDKit 解析 + 化学指纹，不属于图谱节点范围；
 若有需求可单独写 import_tcmbank_mol2.py）。
 
-节点（3 类，源 xlsx）：
-  - Disease_TCMBank    (disease_all.xlsx,    32,530 行)  Disease_id + DisGENet/HPO/MeSH 桥接
-  - Target_TCMBank     (gene_all.xlsx,       15,111 行)  Target_id + Gene_name + TTD
-  - Ingredient_TCMBank (ingredient_all.xlsx, 61,966 行)  TCMBank_ID + Smiles + SymMap 桥接
+节点（4 类，源 xlsx，统一标签并用 source_db 区分来源）：
+  - Herb       (herb_all.xlsx) 中药名称、性味归经和跨库 ID
+  - Disease    (disease_all.xlsx,    32,530 行)  Disease_id + DisGENet/HPO/MeSH 桥接
+  - Target     (gene_all.xlsx,       15,111 行)  Target_id + Gene_name + TTD
+  - Ingredient (ingredient_all.xlsx, 61,966 行)  TCMBank_ID + Smiles + SymMap 桥接
                                                          （253 列仅取关键 20 列，避免属性爆炸）
 
 依据：``判断.md`` §3.4 P2 范围
@@ -33,7 +34,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-TCMBANK_DIR = Path("D:/AI/project/RenShu-AI/TCM_Dataset/TCMBank")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+TCMBANK_DIR = get_tcm_dataset_root() / "TCMBank"
 BATCH_SIZE = 500
 
 
@@ -54,8 +57,34 @@ class Stats:
 
 # ===== 各类型规格定义 =====
 
+HERB_SPEC = NodeTypeSpec(
+    label="Herb",
+    file_path=TCMBANK_DIR / "herb_all.xlsx",
+    pk_col="TCMBank_ID",
+    field_map={
+        "TCMBank_ID": "tcmbank_id",
+        "TCM_name": "name_zh",
+        "TCM_name_en": "name_en",
+        "Herb_pinyin_name": "pinyin",
+        "Herb_latin_name": "latin",
+        "Properties": "properties",
+        "Meridians": "meridians",
+        "UsePart": "use_part",
+        "Function": "function",
+        "Indication": "indication_zh",
+        "Toxicity": "toxicity",
+        "Therapeutic_en_class": "therapeutic_class_en",
+        "Therapeutic_cn_class": "therapeutic_class_zh",
+        "TCMID_id": "tcmid_id",
+        "TCM_ID_id": "tcm_id_id",
+        "SymMap_id": "symmap_id",
+        "TCMSP_id": "tcmsp_id",
+        "Herb_ID": "herb_id",
+    },
+)
+
 DISEASE_SPEC = NodeTypeSpec(
-    label="Disease_TCMBank",
+    label="Disease",
     file_path=TCMBANK_DIR / "disease_all.xlsx",
     pk_col="Disease_id",
     field_map={
@@ -76,7 +105,7 @@ DISEASE_SPEC = NodeTypeSpec(
 )
 
 TARGET_SPEC = NodeTypeSpec(
-    label="Target_TCMBank",
+    label="Target",
     file_path=TCMBANK_DIR / "gene_all.xlsx",
     pk_col="Target_id",
     field_map={
@@ -96,7 +125,7 @@ TARGET_SPEC = NodeTypeSpec(
 # ingredient_all.xlsx 253 列，只取核心 25 列（基础标识 + 桥接 + 关键化学指标）
 # 完整化学描述符留给 RDKit / mol2 解析脚本
 INGREDIENT_SPEC = NodeTypeSpec(
-    label="Ingredient_TCMBank",
+    label="Ingredient",
     file_path=TCMBANK_DIR / "ingredient_all.xlsx",
     pk_col="TCMBank_ID",
     field_map={
@@ -128,7 +157,7 @@ INGREDIENT_SPEC = NodeTypeSpec(
     },
 )
 
-ALL_SPECS: list[NodeTypeSpec] = [DISEASE_SPEC, TARGET_SPEC, INGREDIENT_SPEC]
+ALL_SPECS: list[NodeTypeSpec] = [HERB_SPEC, DISEASE_SPEC, TARGET_SPEC, INGREDIENT_SPEC]
 
 
 # ===== 解析 =====
@@ -146,6 +175,7 @@ def _project_row(headers: list[str], values: list, spec: NodeTypeSpec) -> dict |
         if isinstance(v, str) and v.strip() == "":
             continue
         out[dst] = v
+    out["source_db"] = "TCMBank"
     return out
 
 
@@ -190,12 +220,10 @@ def collect_stats() -> Stats:
 def _cypher_upsert(spec: NodeTypeSpec) -> str:
     props = list(spec.field_map.values())
     pk_prop = props[0]
-    extra = [f"n.{p} = row.{p}" for p in props[1:]]
-    set_part = ", ".join(extra) if extra else ""
     cypher = f"""
     UNWIND $batch AS row
     MERGE (n:{spec.label} {{{pk_prop}: row.{pk_prop}}})
-    {"SET " + set_part if set_part else ""}
+    SET n += row
     """
     return cypher.strip()
 

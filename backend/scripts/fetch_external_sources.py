@@ -1,6 +1,6 @@
 """外部 TCM 关系数据源下载器 (P0.5)
 
-下载 4 HPO + 4 SIDER 文件到 ``TCM_Dataset/_external/``。
+下载 HPOA 或可选 SIDER 文件到 ``TCM_Dataset/_external/``。
 幂等：已存在则跳过。可用 ``--force`` 强制覆盖。
 
 依据：``docs/external_relation_fetch_plan.md`` 方案 A。
@@ -25,7 +25,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-TCM_ROOT = Path("D:/AI/project/RenShu-AI/TCM_Dataset")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+TCM_ROOT = get_tcm_dataset_root()
 EXTERNAL_ROOT = TCM_ROOT / "_external"
 
 HPO_DIR = EXTERNAL_ROOT / "HPO"
@@ -41,10 +43,9 @@ class Asset:
 
 
 HPO_ASSETS: tuple[Asset, ...] = (
-    Asset("hp.obo", "https://raw.githubusercontent.com/obophenotype/human-phenotype-ontology/master/hp.obo", HPO_DIR / "hp.obo", 10_703_106),
-    Asset("phenotype.hpoa", "http://purl.obolibrary.org/obo/hp/hpoa/phenotype.hpoa", HPO_DIR / "phenotype.hpoa", 35_261_380),
-    Asset("genes_to_phenotype.txt", "http://purl.obolibrary.org/obo/hp/hpoa/genes_to_phenotype.txt", HPO_DIR / "genes_to_phenotype.txt", 20_533_481),
-    Asset("en_product4.xml", "http://www.orphadata.org/data/xml/en_product4.xml", HPO_DIR / "en_product4.xml", 48_788_342),
+    Asset("hp.obo", "https://raw.githubusercontent.com/obophenotype/human-phenotype-ontology/master/hp.obo", HPO_DIR / "hp.obo", 11_222_341),
+    Asset("phenotype.hpoa", "http://purl.obolibrary.org/obo/hp/hpoa/phenotype.hpoa", HPO_DIR / "phenotype.hpoa", 35_672_303),
+    Asset("genes_to_phenotype.txt", "http://purl.obolibrary.org/obo/hp/hpoa/genes_to_phenotype.txt", HPO_DIR / "genes_to_phenotype.txt", 20_732_778),
 )
 
 SIDER_ASSETS: tuple[Asset, ...] = (
@@ -95,12 +96,21 @@ def _md5(path: Path) -> str:
     return h.hexdigest()
 
 
-def main(force: bool = False, verify: bool = True) -> int:
+def main(
+    force: bool = False,
+    verify: bool = True,
+    sources: set[str] | None = None,
+) -> int:
     print(f"[DIR] External data root: {EXTERNAL_ROOT}")
     HPO_DIR.mkdir(parents=True, exist_ok=True)
     SIDER_DIR.mkdir(parents=True, exist_ok=True)
 
-    plan: list[Asset] = [*HPO_ASSETS, *SIDER_ASSETS]
+    sources = sources or {"hpo", "sider"}
+    plan: list[Asset] = []
+    if "hpo" in sources:
+        plan.extend(HPO_ASSETS)
+    if "sider" in sources:
+        plan.extend(SIDER_ASSETS)
     failed: list[str] = []
     total_bytes_new = 0
 
@@ -137,7 +147,17 @@ def main(force: bool = False, verify: bool = True) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download HPO + SIDER external sources")
+    parser.add_argument(
+        "--sources",
+        nargs="+",
+        choices=["hpo", "sider"],
+        default=["hpo", "sider"],
+    )
     parser.add_argument("--force", action="store_true", help="Re-download even if file size matches")
     parser.add_argument("--no-verify", action="store_true", help="Skip size verification step")
     args = parser.parse_args()
-    raise SystemExit(main(force=args.force, verify=not args.no_verify))
+    raise SystemExit(main(
+        force=args.force,
+        verify=not args.no_verify,
+        sources=set(args.sources),
+    ))

@@ -8,6 +8,7 @@
 4. 异步非流式 (ainvoke)
 """
 
+import os
 import sys
 import asyncio
 from pathlib import Path
@@ -20,8 +21,8 @@ from app.src.core.language_model.llm_provider import get_langchain_llm
 from langchain_core.messages import HumanMessage
 
 # 测试配置 - 请替换为你的 API Key
-API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-BASE_URL = "https://www.dmxapi.cn/v1"
+API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 def test_minimax_sync_stream():
     """测试 1: 同步流式 (stream) - 启用 thinking mode"""

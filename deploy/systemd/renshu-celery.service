@@ -1,0 +1,20 @@
+[Unit]
+Description=RenShu AI TCM Celery worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/claude/Projects/RenShu-AI/backend
+EnvironmentFile=/home/claude/Projects/RenShu-AI/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/claude/Projects/RenShu-AI/backend
+ExecStart=/home/claude/Projects/RenShu-AI/backend/.venv/bin/celery -A app.src.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=2
+Restart=on-failure
+RestartSec=5
+UMask=0027
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

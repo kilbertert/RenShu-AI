@@ -27,10 +27,16 @@ class TCMNeo4jConnection:
 
     def _initialize_connection(self):
         """初始化Neo4j连接"""
-        uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        username = os.getenv("NEO4J_USER", "neo4j")
-        password = os.getenv("NEO4J_PASSWORD", "")
-        database = os.getenv("NEO4J_DB", "tcm_graph")
+        uri = os.getenv("NEO4J_URI")
+        username = os.getenv("NEO4J_USER")
+        password = os.getenv("NEO4J_PASSWORD")
+        database = os.getenv("NEO4J_DB", "neo4j")
+
+        # 图谱是可选依赖。配置不完整时必须显式降级，不能用默认地址
+        # 意外连接到本机其他 Neo4j 实例。
+        if not uri or not username or not password:
+            self._graph = None
+            return
 
         try:
             self._graph = Neo4jGraph(

@@ -36,7 +36,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-SYMMAP_DIR = Path("D:/AI/project/RenShu-AI/TCM_Dataset/SymMap_v2")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+SYMMAP_DIR = get_tcm_dataset_root() / "SymMap_v2"
 BATCH_SIZE = 500
 
 
@@ -209,6 +211,9 @@ def _project_row(row: dict, spec: NodeTypeSpec) -> dict:
         if isinstance(v, str) and v.strip() == "":
             continue
         out[dst] = v
+    if spec.label == "Target" and out.get("ncbi_id") is not None:
+        out["ncbi_gene_id"] = f"NCBI:{str(out['ncbi_id']).strip()}"
+    out["source_db"] = "SymMap"
     return out
 
 
@@ -260,12 +265,10 @@ def _cypher_upsert(spec: NodeTypeSpec) -> str:
     """生成 MERGE Cypher；字段名经白名单 field_map 控制"""
     props = list(spec.field_map.values())
     pk_prop = props[0]
-    extra = [f"n.{p} = row.{p}" for p in props[1:]]
-    set_part = ", ".join(extra) if extra else ""
     cypher = f"""
     UNWIND $batch AS row
     MERGE (n:{spec.label} {{{pk_prop}: row.{pk_prop}}})
-    {"SET " + set_part if set_part else ""}
+    SET n += row
     """
     return cypher.strip()
 

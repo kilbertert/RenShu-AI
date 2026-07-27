@@ -43,6 +43,12 @@ class AccountService(BaseService[Account]):
         self.logger = get_logger("AccountService")
         super().__init__(Account, session)
 
+    async def has_admin_accounts(self) -> bool:
+        """判断系统是否已经存在管理员账户。"""
+        stmt = select(Account.id).where(Account.account_type == "admin").limit(1)
+        result = await self.session.exec(stmt)
+        return result.first() is not None
+
     # ==================== 患者注册/登录/登出 ====================
 
     async def register_patient(

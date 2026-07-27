@@ -123,6 +123,21 @@ async def assess_complexity(state: DiagnoseOverallState) -> Dict[str, Any]:
 
         score += factors["chronic_conditions"]
 
+        # === 因素6: 医疗报告异常（仅提高复核复杂度，不直接推导证型） ===
+        report_analysis = state.get("report_analysis") or {}
+        abnormal_metrics = [
+            item for item in (report_analysis.get("metrics") or [])
+            if isinstance(item, dict)
+            and item.get("abnormal_flag") in {"high", "low", "abnormal", "positive"}
+        ]
+        if report_analysis.get("urgent_warning"):
+            factors["report_abnormality"] = 2
+        elif abnormal_metrics or report_analysis.get("key_findings"):
+            factors["report_abnormality"] = 1
+        else:
+            factors["report_abnormality"] = 0
+        score += factors["report_abnormality"]
+
         # === 确定复杂度级别 ===
         if score <= diagnose_config.SIMPLE_THRESHOLD:
             level = ComplexityLevel.SIMPLE
@@ -230,7 +245,10 @@ def _check_contradiction(collected_info: CollectedDiagnoseInfo) -> bool:
     if collected_info.cold_heat:
         cold_heat_lower = collected_info.cold_heat.lower()
         has_cold = any(k in cold_heat_lower for k in ["怕冷", "恶寒", "畏寒"])
-        has_heat = any(k in cold_heat_lower for k in ["发热", "怕热", "烦热"])
+        has_heat = any(
+            k in cold_heat_lower
+            for k in ["发热", "怕热", "烦热", "潮热", "手足心热", "五心烦热"]
+        )
         if has_cold and has_heat:
             return True
 
@@ -273,6 +291,9 @@ def _generate_reasoning(factors: Dict[str, int], symptom_count: int, organ_count
 
     if factors.get("chronic_conditions", 0) > 0:
         parts.append("有既往病史")
+
+    if factors.get("report_abnormality", 0) > 0:
+        parts.append("医疗报告存在需结合临床复核的发现")
 
     if not parts:
         return "症状单一明确"

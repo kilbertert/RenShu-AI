@@ -142,7 +142,7 @@ class TCMMemory:
                 neo4j_config = Neo4jConfig(
                     url=self.config.graph_store_config.get("url", "bolt://localhost:7687"),
                     username=self.config.graph_store_config.get("username", "neo4j"),
-                    password=self.config.graph_store_config.get("password", "tcm_graph_2026")
+                    password=self.config.graph_store_config.get("password", "")
                 )
                 mem0_config.graph_store = neo4j_config
 

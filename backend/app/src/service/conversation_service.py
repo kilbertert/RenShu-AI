@@ -1,7 +1,7 @@
 import uuid
 
-from app.src.model import Conversation, Message
-from app.src.response.exception.exceptions import InternalServerException
+from app.src.model import ChatAttachment, Conversation, Message
+from app.src.response.exception.exceptions import AuthorizationException, InternalServerException
 from app.src.service.base_service import BaseService
 from app.src.common.decorators import require_login
 from app.src.common.context import get_current_user_id
@@ -31,7 +31,8 @@ class ConversationService(BaseService):
     @require_login
     async def get_messages_by_conversation_id(self, conversation_id: str):
         """获取指定会话的消息列表"""
-        return await self._get_messages_by_conversation_id(conversation_id)
+        user_id = get_current_user_id()
+        return await self._get_messages_by_conversation_id(conversation_id, user_id=user_id)
 
     @require_login
     async def delete_conversation(self, conversation_id: str):
@@ -53,12 +54,25 @@ class ConversationService(BaseService):
 
     # ========== 内部方法（不加装饰器） ==========
 
-    async def _get_or_create_conversation(self, conversation_id: str, user_id: str, title: str):
-        """内部方法：获取或创建会话（健壮的并发处理）"""
-        # 1. 尝试查询
+    async def _get_owned_conversation(self, conversation_id: str, user_id: str):
+        """读取属于指定用户的会话；跨用户访问统一拒绝。"""
         stmt = select(Conversation).where(Conversation.id == conversation_id)
         result = await self.session.exec(stmt)
         conversation = result.first()
+        if conversation is None:
+            return None
+        if str(conversation.user_id) != str(user_id):
+            raise AuthorizationException("会话不存在或无权访问")
+        return conversation
+
+    async def assert_conversation_access(self, conversation_id: str, user_id: str) -> None:
+        """若会话已存在则验证所有权；不存在时允许后续由当前用户创建。"""
+        await self._get_owned_conversation(conversation_id, user_id)
+
+    async def _get_or_create_conversation(self, conversation_id: str, user_id: str, title: str):
+        """内部方法：获取或创建会话（健壮的并发处理）"""
+        # 1. 尝试查询
+        conversation = await self._get_owned_conversation(conversation_id, user_id)
         
         if conversation:
             return conversation
@@ -78,9 +92,7 @@ class ConversationService(BaseService):
         except Exception:
             # 3. 如果创建失败（可能是并发写入冲突），回滚并重试查询
             await self.session.rollback()
-            stmt = select(Conversation).where(Conversation.id == conversation_id)
-            result = await self.session.exec(stmt)
-            conversation = result.first()
+            conversation = await self._get_owned_conversation(conversation_id, user_id)
             if conversation:
                 return conversation
             # 如果依然拿不到，说明是真正的数据库错误，抛出异常
@@ -105,20 +117,22 @@ class ConversationService(BaseService):
     async def _create_conversation(self, user_id: str, **kwargs):
         """内部方法：创建会话"""
         try:
-            conversation = await self.get(user_id)
-            if not conversation:
-                conversation = Conversation(
-                    user_id=user_id,
-                    session_id=str(uuid.uuid4()),
-                    conversation_type="日常交流",
-                )
-                return await self.create(conversation)
-            return conversation
+            conversation = Conversation(
+                user_id=user_id,
+                session_id=uuid.uuid4(),
+                conversation_type=kwargs.pop("conversation_type", "general_chat"),
+                **kwargs,
+            )
+            return await self.create(conversation)
         except Exception as e:
             raise InternalServerException(message="会话添加错误", details={"error": str(e)})
 
-    async def _get_messages_by_conversation_id(self, conversation_id: str):
+    async def _get_messages_by_conversation_id(self, conversation_id: str, user_id: str | None = None):
         """内部方法：根据会话ID获取消息列表"""
+        if user_id is not None:
+            conversation = await self._get_owned_conversation(conversation_id, user_id)
+            if conversation is None:
+                return []
         stmt = select(Message).where(
             Message.conversation_id == conversation_id,
             Message.is_deleted == False
@@ -136,7 +150,15 @@ class ConversationService(BaseService):
         if not conversation:
             raise ValueError("会话不存在或无权访问")
 
-        # 2. 删除会话下的所有消息 (物理删除或软删除均可，这里选择物理删除以保持整洁，或者软删除如果为了审计)
+        # 2. 先删除附件元数据，使私有下载接口立即失效，并避免附件外键阻塞消息/会话删除。
+        attachments_stmt = select(ChatAttachment).where(
+            ChatAttachment.conversation_id == conversation_id
+        )
+        attachments_result = await self.session.exec(attachments_stmt)
+        for attachment in attachments_result.all():
+            await self.session.delete(attachment)
+
+        # 3. 删除会话下的所有消息 (物理删除或软删除均可，这里选择物理删除以保持整洁，或者软删除如果为了审计)
         # 由于Message有is_deleted，我们可以选择软删除所有消息，或者直接物理删除。
         # 考虑到 Conversation 是物理删除（假设），那么消息也应该物理删除。
         # 但为了稳妥，先尝试物理删除会话。如果配置了级联删除，消息会自动删除。
@@ -149,7 +171,7 @@ class ConversationService(BaseService):
         for msg in messages:
             await self.session.delete(msg)
             
-        # 3. 删除会话
+        # 4. 删除会话
         await self.session.delete(conversation)
         return True
 
@@ -211,8 +233,6 @@ class ConversationService(BaseService):
             self.session.add(msg)
             
         return True
-
-
 
 
 

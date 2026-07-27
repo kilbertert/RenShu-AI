@@ -30,7 +30,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-SIDER_DIR = Path("D:/AI/project/RenShu-AI/TCM_Dataset/_external/SIDER")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+SIDER_DIR = get_tcm_dataset_root() / "_external" / "SIDER"
 BATCH_SIZE = 1000
 
 

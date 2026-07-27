@@ -11,7 +11,7 @@ models:
     # api_base: http://192.168.110.131:11434/v1
     # api_version: 2024-05-01-preview
     auth_type: api_key # or azure_managed_identity
-    api_key: sk-61b7c4613aab4039a70c41a6da55842c
+    api_key: ${GRAPHRAG_CHAT_API_KEY}
     # audience: "https://cognitiveservices.azure.com/.default"
     # organization: <organization_id>
     model: deepseek-chat
@@ -31,7 +31,7 @@ models:
     # api_base: http://192.168.110.131:11434/v1
     # api_version: 2024-05-01-preview
     auth_type: api_key # or azure_managed_identity
-    api_key: sk-648be3a2c6af45df9b4908c182faf2f5
+    api_key: ${GRAPHRAG_EMBEDDING_API_KEY}
     # api_key: qwen
     # audience: "https://cognitiveservices.azure.com/.default"
     # organization: <organization_id>

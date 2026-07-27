@@ -5,12 +5,19 @@ export interface ChatMessage {
   text: string;
   timestamp: Date;
   attachments?: Array<{
+    id?: string;
     type: 'image' | 'file';
     url: string;
     name: string;
+    kind?: 'generic_image' | 'tongue_image' | 'medical_report';
+    mime_type?: string;
+    size_bytes?: number;
   }>;
   agentSteps?: string[];
   queryType?: string;
+  diagnosisResult?: Record<string, any>;
+  tongueAnalysis?: Record<string, any>;
+  reportAnalysis?: Record<string, any>;
 }
 // AI 模型配置
 export interface AIModelConfig {

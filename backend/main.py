@@ -2,6 +2,7 @@ import os
 import time
 from fastapi import FastAPI
 from app.src.common.config.app_config import create_app
+from app.src.common.config.setting_config import settings
 from app.src.response.utils import success_200
 from app.src.response.response_models import BaseResponse
 from app.src.utils import get_logger
@@ -93,10 +94,10 @@ if __name__ == "__main__":
     import uvicorn
     logger.info("应用启动中")
     uvicorn.run(
-        app=app,
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
+        app="main:app",
+        host=settings.APP_HOST,
+        port=settings.APP_PORT,
+        reload=settings.APP_RELOAD,
         log_level="info",
         timeout_keep_alive=300,  # 保持连接5分钟，避免长时间流式响应被中断
         timeout_graceful_shutdown=30  # 优雅关闭超时30秒

@@ -16,7 +16,13 @@ export function camelToSnake(str: string): string {
  * @returns 键已转换的对象
  */
 export function convertKeysToSnake(obj: any): any {
-  if (obj === null || typeof obj !== 'object' || obj instanceof Date || obj instanceof File) {
+  if (
+    obj === null ||
+    typeof obj !== 'object' ||
+    obj instanceof Date ||
+    obj instanceof File ||
+    obj instanceof Blob
+  ) {
     return obj;
   }
 
@@ -41,7 +47,13 @@ export function convertKeysToSnake(obj: any): any {
  * @returns 键已转换的对象
  */
 export function convertKeysToCamel(obj: any): any {
-  if (obj === null || typeof obj !== 'object' || obj instanceof Date || obj instanceof File) {
+  if (
+    obj === null ||
+    typeof obj !== 'object' ||
+    obj instanceof Date ||
+    obj instanceof File ||
+    obj instanceof Blob
+  ) {
     return obj;
   }
 

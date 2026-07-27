@@ -1,0 +1,21 @@
+[Unit]
+Description=RenShu AI TCM backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/claude/Projects/RenShu-AI/backend
+EnvironmentFile=/home/claude/Projects/RenShu-AI/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/claude/Projects/RenShu-AI/backend
+ExecStart=/home/claude/Projects/RenShu-AI/backend/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8094 --timeout-keep-alive 300 --timeout-graceful-shutdown 30
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 60); do /usr/bin/curl -fsS http://127.0.0.1:8094/health >/dev/null && exit 0; sleep 1; done; exit 1'
+Restart=on-failure
+RestartSec=5
+UMask=0027
+KillSignal=SIGINT
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

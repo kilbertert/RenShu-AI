@@ -26,6 +26,10 @@ from enum import Enum
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.src.agent.middleware import BaseMiddleware
+from app.src.agent.safety import (
+    detect_psychological_crisis,
+    psychological_crisis_response,
+)
 
 
 
@@ -33,7 +37,9 @@ from app.src.agent.middleware import BaseMiddleware
 class GuardrailAction(Enum):
     """守卫动作"""
     ALLOW = "allow"           # 允许通过
+    BLOCK_CRISIS = "block_crisis"  # 自杀/自伤等心理危机阻断
     BLOCK_EMERGENCY = "block_emergency"  # 紧急情况阻断
+    BLOCK_MEDICATION_SAFETY = "block_medication_safety"  # 高风险用药阻断
     BLOCK_OOS = "block_oos"   # 超范围阻断
     WARN = "warn"             # 警告但允许
     CLARIFY = "clarify"       # 需要澄清
@@ -94,10 +100,18 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
     # 紧急情况正则模式（症状组合）
     EMERGENCY_PATTERNS = [
         r"(突然|剧烈).{0,5}(头痛|胸痛|腹痛)",
+        r"(?:胸口|胸部|心前区).{0,10}(?:压榨|紧缩|压迫|撕裂).{0,8}(?:痛|疼|不适)",
+        r"(?:胸痛|胸口疼|胸部疼痛).{0,60}(?:左肩|左臂|下颌|后背|冷汗|气短|恶心)",
+        r"(?:左肩|左臂|下颌|后背).{0,40}(?:放射|牵扯).{0,30}(?:胸痛|胸口疼|胸部疼痛)",
+        r"(?:胸痛|胸口疼|胸部疼痛).{0,30}(?:持续|超过|已有).{0,8}(?:十五|15|二十|20|三十|30)(?:分钟|分)",
         r"(持续|反复).{0,5}(高烧|高热).{0,5}(不退|三天|3天)",
         r"(大量|不止).{0,5}(出血|吐血|便血)",
+        r"(?:呕血|吐血|黑便|柏油样便).{0,30}(?:头晕|心慌|乏力|冷汗|晕厥)",
         r"(意识|神志).{0,5}(不清|模糊|丧失)",
         r"(呼吸|喘).{0,5}(困难|不上来|费力)",
+        r"(?:突然|急性).{0,12}(?:一侧肢体无力|说话不清|口角歪斜|视物不清)",
+        r"(?:嘴唇|舌头|咽喉).{0,8}(?:肿胀|肿起来).{0,20}(?:喘|呼吸困难|窒息)",
+        r"(?:孕期|怀孕|妊娠).{0,20}(?:大量出血|剧烈腹痛|晕厥)",
     ]
 
     # 西医/超范围关键词
@@ -139,6 +153,18 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
         "游戏", "电影", "明星", "八卦",
         "编程", "代码", "Python", "Java",
     }
+
+    NON_MEDICAL_CONTEXT_KEYWORDS = (
+        "电脑", "手机", "代码", "程序", "软件", "操作系统", "电脑系统",
+        "网络", "网页", "浏览器", "打印机", "服务器", "数据库", "汽车",
+        "机器", "设备", "路由器", "天气",
+    )
+    HUMAN_HEALTH_CONTEXT_TERMS = (
+        "头痛", "头晕", "眩晕", "咳嗽", "气短", "胸闷", "胸痛", "心悸",
+        "恶心", "呕吐", "腰痛", "耳鸣", "腹痛", "胃痛", "腹泻", "便秘",
+        "尿频", "夜尿", "失眠", "多梦", "食欲", "口干", "口苦", "盗汗",
+        "自汗", "月经", "白带", "怀孕", "眼睛疼", "咽痛", "皮疹",
+    )
 
     # 中医相关关键词（服务范围内）
     IN_SCOPE_KEYWORDS = {
@@ -275,6 +301,15 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
         if result.action == GuardrailAction.ALLOW:
             return None
 
+        elif result.action == GuardrailAction.BLOCK_CRISIS:
+            return {
+                "messages": [AIMessage(content=result.response)],
+                "answer": result.response,
+                "should_seek_doctor": True,
+                "steps": [f"安全检查: 心理危机拦截 ({result.matched_rule})"],
+                "jump_to": "end",
+            }
+
         elif result.action == GuardrailAction.BLOCK_EMERGENCY:
             return {
                 "messages": [AIMessage(content=result.response)],
@@ -289,6 +324,15 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
                 "messages": [AIMessage(content=result.response)],
                 "answer": result.response,
                 "steps": [f"安全检查: 超范围拦截 ({result.matched_rule})"],
+                "jump_to": "end",
+            }
+
+        elif result.action == GuardrailAction.BLOCK_MEDICATION_SAFETY:
+            return {
+                "messages": [AIMessage(content=result.response)],
+                "answer": result.response,
+                "should_seek_doctor": True,
+                "steps": [f"安全检查: 高风险用药拦截 ({result.matched_rule})"],
                 "jump_to": "end",
             }
 
@@ -354,33 +398,50 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
         检查用户输入
 
         判断顺序：
-        1. 紧急情况检测（关键词 + 正则）
-        2. 超范围检测（关键词 + 正则）
-        3. 闲聊检测（关键词）
-        4. 服务范围内确认（关键词）
-        5. 默认允许（删除了对路由结果的依赖和 LLM 兜底）
+        1. 心理危机检测（自杀/自伤/轻生）
+        2. 紧急情况检测（关键词 + 正则）
+        3. 超范围检测（关键词 + 正则）
+        4. 闲聊检测（关键词）
+        5. 服务范围内确认（关键词）
+        6. 默认允许（删除了对路由结果的依赖和 LLM 兜底）
         """
         # 预处理
         text = user_input.lower().strip()
 
-        # ========== 1. 紧急情况检测 ==========
+        # ========== 1. 心理危机检测 ==========
+        crisis = detect_psychological_crisis(user_input)
+        if crisis.is_crisis:
+            return GuardrailResult(
+                action=GuardrailAction.BLOCK_CRISIS,
+                reason="检测到自杀、自伤或轻生风险表达",
+                matched_rule=crisis.matched_text,
+                response=psychological_crisis_response(),
+                confidence=crisis.confidence,
+            )
+
+        # ========== 2. 紧急情况检测 ==========
         if self.warn_emergency:
             result = self._check_emergency(text, user_input)
             if result.action != GuardrailAction.ALLOW:
                 return result
 
-        # ========== 2. 超范围检测（仅检测明确的西医关键词） ==========
+        # ========== 3. 孕期禁忌药/有毒药材剂量请求 ==========
+        result = self._check_medication_safety(text, user_input)
+        if result.action != GuardrailAction.ALLOW:
+            return result
+
+        # ========== 4. 超范围检测（仅检测明确的西医关键词） ==========
         if self.reject_out_of_scope:
             result = self._check_out_of_scope(text, user_input)
             if result.action != GuardrailAction.ALLOW:
                 return result
 
-        # ========== 3. 闲聊检测 ==========
+        # ========== 5. 闲聊检测 ==========
         result = self._check_chitchat(text, user_input)
         if result.action != GuardrailAction.ALLOW:
             return result
 
-        # ========== 4. 服务范围内确认 ==========
+        # ========== 6. 服务范围内确认 ==========
         if self._is_in_scope(text):
             # 检查是否需要警告
             warn_result = self._check_should_warn(text, user_input)
@@ -389,16 +450,97 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
             # 明确在服务范围内，允许通过
             return GuardrailResult(action=GuardrailAction.ALLOW)
 
-        # ========== 5. 默认允许 ==========
+        # ========== 7. 默认允许 ==========
         # 如果没有命中拦截规则，且包含中医相关内容，默认允许
         # 让后续的意图识别来判断具体如何处理
+        return GuardrailResult(action=GuardrailAction.ALLOW)
+
+    def _check_medication_safety(self, text: str, original: str) -> GuardrailResult:
+        """在意图分类前拦截妊娠禁忌药和有毒药材的个体化剂量请求。"""
+        from app.src.agent.tcm_validators import PREGNANCY_CONTRAINDICATED_HERBS
+
+        pregnancy_markers = ("怀孕", "孕妇", "妊娠", "孕期", "孕早期", "孕中期", "孕晚期")
+        dosage_markers = (
+            "多少克", "剂量", "用量", "每天吃", "每日吃", "怎么服", "怎么吃",
+            "服用多少", "直接告诉我", "开个方", "给我开", "完整中药处方",
+            "完整处方", "写清楚每味药", "自己购买服用", "自行购买服用",
+        )
+        prohibited = PREGNANCY_CONTRAINDICATED_HERBS["禁用"]
+        caution = PREGNANCY_CONTRAINDICATED_HERBS["慎用"]
+        mentioned_prohibited = [herb for herb in prohibited if herb in original]
+        mentioned_caution = [herb for herb in caution if herb in original]
+        is_pregnant = any(marker in original for marker in pregnancy_markers)
+        requests_dosage = any(marker in original for marker in dosage_markers)
+
+        if is_pregnant and (mentioned_prohibited or mentioned_caution):
+            herbs = [*mentioned_prohibited, *mentioned_caution]
+            return GuardrailResult(
+                action=GuardrailAction.BLOCK_MEDICATION_SAFETY,
+                reason="妊娠期涉及禁用或慎用药材",
+                matched_rule="妊娠用药:" + "、".join(herbs),
+                response=self._get_medication_safety_response(
+                    prohibited=mentioned_prohibited,
+                    caution=mentioned_caution,
+                    pregnancy=True,
+                ),
+                confidence=1.0,
+            )
+
+        if is_pregnant and requests_dosage:
+            return GuardrailResult(
+                action=GuardrailAction.BLOCK_MEDICATION_SAFETY,
+                reason="妊娠期个体化处方或剂量请求",
+                matched_rule="妊娠期处方剂量",
+                response=self._get_high_risk_dosage_response("妊娠期"),
+                confidence=1.0,
+            )
+
+        if requests_dosage and mentioned_prohibited:
+            return GuardrailResult(
+                action=GuardrailAction.BLOCK_MEDICATION_SAFETY,
+                reason="有毒或高风险药材个体化剂量请求",
+                matched_rule="高风险剂量:" + "、".join(mentioned_prohibited),
+                response=self._get_medication_safety_response(
+                    prohibited=mentioned_prohibited,
+                    caution=[],
+                    pregnancy=False,
+                ),
+                confidence=1.0,
+            )
+
+        minor_markers = (
+            "婴儿", "婴幼儿", "宝宝", "新生儿", "儿童", "小孩", "孩子",
+        )
+        if requests_dosage and any(marker in original for marker in minor_markers):
+            return GuardrailResult(
+                action=GuardrailAction.BLOCK_MEDICATION_SAFETY,
+                reason="儿童个体化处方或剂量请求",
+                matched_rule="儿童处方剂量",
+                response=self._get_high_risk_dosage_response("儿童"),
+                confidence=1.0,
+            )
+
+        interaction_markers = (
+            "华法林", "利伐沙班", "阿哌沙班", "达比加群", "氯吡格雷",
+            "正在服用多种药", "服用多种药物", "多药联用",
+        )
+        if requests_dosage and any(marker in original for marker in interaction_markers):
+            return GuardrailResult(
+                action=GuardrailAction.BLOCK_MEDICATION_SAFETY,
+                reason="抗凝或多药联用下的个体化中药请求",
+                matched_rule="合并用药处方剂量",
+                response=self._get_high_risk_dosage_response("合并用药"),
+                confidence=1.0,
+            )
+
         return GuardrailResult(action=GuardrailAction.ALLOW)
 
     def _check_emergency(self, text: str, original: str) -> GuardrailResult:
         """检测紧急情况"""
         # 关键词匹配（使用预处理的 set）
         for keyword in self.EMERGENCY_KEYWORDS:
-            if keyword in original:
+            start = original.find(keyword)
+            if start >= 0 and not self._is_negated_symptom(original, start):
                 return GuardrailResult(
                     action=GuardrailAction.BLOCK_EMERGENCY,
                     reason="紧急情况关键词匹配",
@@ -410,7 +552,7 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
         # 正则匹配
         for pattern in self._emergency_patterns:
             match = pattern.search(original)
-            if match:
+            if match and not self._is_negated_symptom(original, match.start()):
                 matched_text = match.group()
                 return GuardrailResult(
                     action=GuardrailAction.BLOCK_EMERGENCY,
@@ -421,6 +563,34 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
                 )
 
         return GuardrailResult(action=GuardrailAction.ALLOW)
+
+    @staticmethod
+    def _is_negated_symptom(original: str, symptom_start: int) -> bool:
+        """识别“无/否认/不伴某症状”，避免把明确否定描述当作急症。
+
+        只处理紧邻前缀或同一顿号枚举中的明确否定；遇到“但/却/现”等转折，
+        以及“不是没有/不能排除”等双重否定时保持急症拦截。
+        """
+        prefix = original[max(0, symptom_start - 12):symptom_start]
+        compact = re.sub(r"\s+", "", prefix)
+        if any(token in compact for token in ("不是没有", "并非没有", "不能排除", "不排除")):
+            return False
+        if re.search(r"(?:无|没有|未出现|否认|不伴|并无|未见|未发生)(?:明显|任何|持续|剧烈)?$", compact):
+            return True
+
+        clause_start = max(
+            original.rfind(mark, 0, symptom_start)
+            for mark in ("，", ",", "。", "！", "!", "？", "?", "；", ";", "\n")
+        )
+        clause_prefix = re.sub(r"\s+", "", original[clause_start + 1:symptom_start])
+        if any(token in clause_prefix for token in ("但", "却", "然而", "现", "出现", "转为")):
+            return False
+        return bool(
+            re.match(
+                r"^(?:无|没有|未出现|否认|不伴|并无|未见|未发生)",
+                clause_prefix,
+            )
+        )
 
     def _check_out_of_scope(self, text: str, original: str) -> GuardrailResult:
         """检测超范围问题"""
@@ -457,6 +627,27 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
         greetings = ["你好", "您好", "hi", "hello", "嗨", "早上好", "晚上好", "下午好", "早安", "晚安"]
         if any(g in text for g in greetings):
             return GuardrailResult(action=GuardrailAction.ALLOW)
+
+        non_medical_match = next(
+            (
+                keyword for keyword in self.NON_MEDICAL_CONTEXT_KEYWORDS
+                if keyword.lower() in text or keyword in original
+            ),
+            None,
+        )
+        if non_medical_match:
+            has_human_health_context = any(
+                term in original for term in self.HUMAN_HEALTH_CONTEXT_TERMS
+            )
+            if has_human_health_context:
+                return GuardrailResult(action=GuardrailAction.ALLOW)
+            return GuardrailResult(
+                action=GuardrailAction.CLARIFY,
+                reason="纯非医疗设备或技术语境",
+                matched_rule=non_medical_match,
+                response=self._get_chitchat_response(),
+                confidence=0.98,
+            )
 
         # 检查闲聊关键词
         for keyword in self.CHITCHAT_KEYWORDS:
@@ -611,6 +802,38 @@ class TCMGuardrailsMiddleware(BaseMiddleware):
 
 ---
 如果情况稳定后，您仍有中医调理方面的问题，欢迎继续咨询。
+"""
+
+    def _get_medication_safety_response(
+        self,
+        *,
+        prohibited: list[str],
+        caution: list[str],
+        pregnancy: bool,
+    ) -> str:
+        prohibited_text = "、".join(prohibited) if prohibited else "无"
+        caution_text = "、".join(caution) if caution else "无"
+        context = "妊娠期" if pregnancy else "当前咨询"
+        return f"""
+⚠️ **高风险用药提醒**
+
+您提到的药材中，禁用或高风险药材包括：**{prohibited_text}**；慎用药材包括：**{caution_text}**。
+
+在{context}情况下，我不能提供自行服用的克数、频次或配伍方案。请立即停止自行尝试，并携带药名、药品包装和已经服用的时间/剂量，尽快咨询产科医生、中医师或药师。
+
+如果已经误服后出现腹痛、阴道出血、剧烈呕吐腹泻、心悸、头晕或其他明显不适，请立即前往急诊或拨打 120。
+"""
+
+    @staticmethod
+    def _get_high_risk_dosage_response(group: str) -> str:
+        return f"""
+⚠️ **高风险用药提醒**
+
+您当前描述涉及**{group}**。在没有面诊、完整病史、检查结果和现用药清单的情况下，
+我不能提供可自行执行的中药处方、每味克数、服用频次或加减方案。
+
+请不要自行购药或停改现有治疗，建议携带全部药品包装和检查资料，尽快由执业中医师、
+相关专科医生或药师进行面对面评估。若已经服用后出现明显不适，请及时就医；症状严重时拨打 120。
 """
 
     def _get_out_of_scope_response(self, matched: str) -> str:

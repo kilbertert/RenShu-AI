@@ -71,7 +71,10 @@ async def complex_diagnosis(state: DiagnoseOverallState) -> Dict[str, Any]:
         config = {"configurable": {"thread_id": thread_id}}
         
         # 构建诊断请求
-        prompt = _build_diagnosis_prompt(collected_info)
+        prompt = _build_diagnosis_prompt(
+            collected_info,
+            state.get("report_analysis"),
+        )
         
         # 执行诊断
         logger.info("执行深度辨证分析...")
@@ -119,7 +122,10 @@ async def complex_diagnosis(state: DiagnoseOverallState) -> Dict[str, Any]:
         }
 
 
-def _build_diagnosis_prompt(collected_info: Dict[str, Any]) -> str:
+def _build_diagnosis_prompt(
+    collected_info: Dict[str, Any],
+    report_analysis: Dict[str, Any] | None = None,
+) -> str:
     """
     构建诊断请求提示词
     
@@ -134,6 +140,9 @@ def _build_diagnosis_prompt(collected_info: Dict[str, Any]) -> str:
 
 ## 患者信息
 {json.dumps(collected_info, ensure_ascii=False, indent=2)}
+
+## 医疗报告辅助证据（不得由单项指标直接确定证型）
+{json.dumps(report_analysis or {}, ensure_ascii=False, indent=2)}
 
 ## 分析要求
 

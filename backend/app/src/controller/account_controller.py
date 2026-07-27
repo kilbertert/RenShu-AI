@@ -4,8 +4,11 @@
 处理患者、医生、管理员的注册、登录、登出
 """
 
+import hmac
+from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Request, Depends
+
+from fastapi import APIRouter, Request, Depends, Header, HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.src.service.account_service import AccountService
@@ -17,6 +20,8 @@ from app.src.response.response_models import BaseResponse
 from app.src.response.utils import success_200
 from app.src.utils import get_logger
 from app.src.common.config.prosgresql_config import get_db
+from app.src.common.config.setting_config import settings
+from app.src.common.context import get_user_roles, is_authenticated
 
 router = APIRouter(tags=["账户管理"])
 logger = get_logger("account_controller")
@@ -268,11 +273,35 @@ async def logout_doctor(
 async def register_admin(
     request: Request,
     admin_data: AdminCreate,
+    bootstrap_token: Optional[str] = Header(default=None, alias="X-Admin-Bootstrap-Token"),
     account_service: AccountService = Depends(get_account_service)
 ):
-    """管理员注册"""
+    """管理员注册。
+
+    已有管理员时，仅管理员可继续创建；空库首管理员必须显式开启引导并提供令牌。
+    """
     client_ip = request.state.client_ip
     request_id = request.state.request_id
+
+    has_admin = await account_service.has_admin_accounts()
+    if has_admin:
+        if not is_authenticated():
+            raise HTTPException(status_code=401, detail="请先以管理员身份登录")
+        if not {"admin", "super_admin"}.intersection(get_user_roles()):
+            raise HTTPException(status_code=403, detail="仅管理员可创建管理员账户")
+    else:
+        configured_token = settings.ADMIN_BOOTSTRAP_TOKEN
+        token_valid = bool(
+            settings.ADMIN_BOOTSTRAP_ENABLED
+            and configured_token
+            and bootstrap_token
+            and hmac.compare_digest(bootstrap_token, configured_token)
+        )
+        if not token_valid:
+            raise HTTPException(
+                status_code=403,
+                detail="管理员引导未启用或引导令牌无效",
+            )
 
     logger.info(f"开始管理员注册, username: {admin_data.username}, IP: {client_ip}")
 

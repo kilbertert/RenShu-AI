@@ -2,8 +2,10 @@
 Redis 配置和缓存管理器
 用于高性能缓存：用户配置、模型信息、API Key等
 """
+import asyncio
 import json
 import pickle
+import uuid
 from typing import Optional, Any, Union
 from datetime import timedelta
 import redis.asyncio as redis
@@ -18,6 +20,8 @@ class RedisManager:
     def __init__(self):
         self.redis_client: Optional[redis.Redis] = None
         self._enabled = False
+        self._local_lock_guard = asyncio.Lock()
+        self._local_locks: dict[str, str] = {}
         
     async def init(self, redis_url: str = "redis://localhost:6379/0", enabled: bool = True):
         """初始化 Redis 连接
@@ -119,6 +123,58 @@ class RedisManager:
         except Exception as e:
             logger.warning(f"Redis EXISTS 失败 [{key}]: {e}")
             return False
+
+    async def acquire_lock(self, key: str, ttl: int = 600) -> str | None:
+        """非阻塞获取带所有权令牌的锁；Redis 不可用时退化为进程内锁。"""
+        token = uuid.uuid4().hex
+        if self._enabled and self.redis_client:
+            try:
+                acquired = await self.redis_client.set(
+                    key,
+                    token.encode("utf-8"),
+                    ex=ttl,
+                    nx=True,
+                )
+                return f"redis:{token}" if acquired else None
+            except Exception as exc:
+                logger.warning("Redis LOCK 失败 [%s]: %s，退化为进程内锁", key, exc)
+
+        async with self._local_lock_guard:
+            if key in self._local_locks:
+                return None
+            self._local_locks[key] = token
+        return f"local:{token}"
+
+    async def release_lock(self, key: str, lease: str | None) -> bool:
+        """只允许锁持有者释放，避免旧请求误删新请求的锁。"""
+        if not lease or ":" not in lease:
+            return False
+        backend, token = lease.split(":", 1)
+        if backend == "redis" and self.redis_client:
+            try:
+                released = await self.redis_client.eval(
+                    """
+                    if redis.call('get', KEYS[1]) == ARGV[1] then
+                        return redis.call('del', KEYS[1])
+                    end
+                    return 0
+                    """,
+                    1,
+                    key,
+                    token.encode("utf-8"),
+                )
+                return bool(released)
+            except Exception as exc:
+                logger.warning("Redis UNLOCK 失败 [%s]: %s", key, exc)
+                return False
+
+        if backend == "local":
+            async with self._local_lock_guard:
+                if self._local_locks.get(key) != token:
+                    return False
+                del self._local_locks[key]
+                return True
+        return False
     
     async def mget(self, *keys: str) -> list:
         """批量获取多个键"""

@@ -4,19 +4,19 @@ ITCM Manual Curation 两个 xlsx 的关系灌入 Neo4j。
 
 关系（3 类，源文件）：
 
-1. **Herb-Ingredient 关系** (CONTAINS)
+1. **Herb-Ingredient 关系** (HERB_CONTAINS_INGREDIENT)
    源：``Manual Curation of Herb Ingredient and Target.xlsx`` 总表
    规模：~106,618 行（每行 1 条关系，可能重复）
-   节点匹配：HERB+(CHN) → Herb_ITCM.name_zh
-              INGREDIENT(CHN) → Ingredient_ITCM.name
+   节点匹配：HERB+(CHN) → Herb.name_zh
+              INGREDIENT(ENG) → Ingredient.name
 
-2. **Ingredient-Target 关系** (TARGETS)
+2. **Ingredient-Target 关系** (INGREDIENT_TARGETS)
    源：同上文件总表（related target 列）
    规模：~106,618 行（部分行有 gene symbol）
-   节点匹配：INGREDIENT(CHN) → Ingredient_ITCM.name
-              related target (gene symbol) → Target_ITCM.gene_symbol
+   节点匹配：INGREDIENT(ENG) → Ingredient.name
+              related target (gene symbol) → Target.gene_symbol
 
-3. **Formula-Herb 关系** (CONTAINS)
+3. **Formula-Herb 关系** (FORMULA_CONTAINS_HERB)
    源：``Manual Curation of Formula.xlsx`` ``formula-herb`` sheet
    规模：1,260 行
    节点匹配：方剂名 (CHN) → Formula.name_zh
@@ -45,7 +45,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-ITCM_DIR = Path("D:/AI/project/RenShu-AI/TCM_Dataset/ITCM")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+ITCM_DIR = get_tcm_dataset_root() / "ITCM"
 BATCH_SIZE = 1000
 
 
@@ -75,21 +77,31 @@ def iter_hi_rows():
         yield dict(zip(headers, row))
 
 
+def extract_hi_relation_fields(row: dict) -> tuple[str, str, str]:
+    """提取人工关系表的匹配键。
+
+    ``ingredient_detail.txt`` 的 ``name`` 保存英文成分名，因此必须使用
+    ``INGREDIENT(ENG)``。中文列只覆盖部分记录，并且无法匹配 ITCM 节点。
+    """
+    herb_zh = str(row.get("HERB+(CHN)") or "").strip()
+    ingredient_name = str(row.get("INGREDIENT(ENG)") or "").strip()
+    gene_symbol = str(row.get("related target (gene symbol)") or "").strip()
+    return herb_zh, ingredient_name, gene_symbol
+
+
 def collect_hi_stats() -> RelStats:
     """统计 HI 表中的关系（不去重，纯源行计数）"""
     s = RelStats()
     n_hi = 0
     n_it = 0
     for row in iter_hi_rows():
-        herb_zh = (row.get("HERB+(CHN)") or "").strip() if row.get("HERB+(CHN)") else ""
-        ing_zh = (row.get("INGREDIENT(CHN)") or "").strip() if row.get("INGREDIENT(CHN)") else ""
-        target = (row.get("related target (gene symbol)") or "").strip() if row.get("related target (gene symbol)") else ""
-        if herb_zh and ing_zh:
+        herb_zh, ingredient_name, target = extract_hi_relation_fields(row)
+        if herb_zh and ingredient_name:
             n_hi += 1
-        if ing_zh and target:
+        if ingredient_name and target:
             n_it += 1
-    s.rel_counts["Herb-INGREDIENT_CONTAINS"] = n_hi
-    s.rel_counts["INGREDIENT-Target_TARGETS"] = n_it
+    s.rel_counts["HERB_CONTAINS_INGREDIENT"] = n_hi
+    s.rel_counts["INGREDIENT_TARGETS"] = n_it
     return s
 
 
@@ -109,19 +121,21 @@ def write_hi_to_neo4j(database: str, dry_run: bool = False) -> dict:
 
     cypher_hi = """
     UNWIND $batch AS row
-    MATCH (h:Herb_ITCM {name_zh: row.herb_zh})
-    MATCH (i:Ingredient_ITCM {name: row.ing_zh})
-    MERGE (h)-[r:CONTAINS {pubchem_cid: row.pubchem_cid}]->(i)
+    MATCH (h:Herb {source_db: 'ITCM', name_zh: row.herb_zh})
+    MATCH (i:Ingredient {source_db: 'ITCM', name: row.ingredient_name})
+    MERGE (h)-[r:HERB_CONTAINS_INGREDIENT]->(i)
     SET r.source = row.source,
-        r.ingredient_category = row.category
+        r.ingredient_category = row.category,
+        r.pubchem_cid = coalesce(row.pubchem_cid, r.pubchem_cid)
     RETURN count(r) AS n
     """
     cypher_it = """
     UNWIND $batch AS row
-    MATCH (i:Ingredient_ITCM {name: row.ing_zh})
-    MATCH (t:Target_ITCM {gene_symbol: row.gene_symbol})
-    MERGE (i)-[r:TARGETS {source: row.source}]->(t)
-    SET r.pmid = row.pmid
+    MATCH (i:Ingredient {source_db: 'ITCM', name: row.ingredient_name})
+    MATCH (t:Target {source_db: 'ITCM', gene_symbol: row.gene_symbol})
+    MERGE (i)-[r:INGREDIENT_TARGETS]->(t)
+    SET r.source = row.source,
+        r.pmid = row.pmid
     RETURN count(r) AS n
     """
 
@@ -133,9 +147,7 @@ def write_hi_to_neo4j(database: str, dry_run: bool = False) -> dict:
     n_rows = 0
     for row in iter_hi_rows():
         n_rows += 1
-        herb_zh = (row.get("HERB+(CHN)") or "").strip() if row.get("HERB+(CHN)") else ""
-        ing_zh = (row.get("INGREDIENT(CHN)") or "").strip() if row.get("INGREDIENT(CHN)") else ""
-        target = (row.get("related target (gene symbol)") or "").strip() if row.get("related target (gene symbol)") else ""
+        herb_zh, ingredient_name, target = extract_hi_relation_fields(row)
         source_herb = (row.get("herb-ingredient source") or "").strip() if row.get("herb-ingredient source") else ""
         source_it = (row.get("ingredient-target source") or "").strip() if row.get("ingredient-target source") else ""
         category = (row.get("分类") or "").strip() if row.get("分类") else ""
@@ -161,9 +173,9 @@ def write_hi_to_neo4j(database: str, dry_run: bool = False) -> dict:
                 except ValueError:
                     pubchem_cid = first
 
-        if herb_zh and ing_zh:
+        if herb_zh and ingredient_name:
             batch_hi.append({
-                "herb_zh": herb_zh, "ing_zh": ing_zh,
+                "herb_zh": herb_zh, "ingredient_name": ingredient_name,
                 "pubchem_cid": pubchem_cid, "source": source_herb,
                 "category": category,
             })
@@ -173,9 +185,9 @@ def write_hi_to_neo4j(database: str, dry_run: bool = False) -> dict:
                 written_hi += len(batch_hi)
                 batch_hi = []
 
-        if ing_zh and target:
+        if ingredient_name and target:
             batch_it.append({
-                "ing_zh": ing_zh, "gene_symbol": target,
+                "ingredient_name": ingredient_name, "gene_symbol": target,
                 "source": source_it, "pmid": pmid,
             })
             if len(batch_it) >= BATCH_SIZE:
@@ -195,8 +207,8 @@ def write_hi_to_neo4j(database: str, dry_run: bool = False) -> dict:
 
     dt = time.monotonic() - t0
     print(f"  [HI]   scanned {n_rows:7d} rows in {dt:.1f}s")
-    print(f"  [HI]   Herb-INGREDIENT_CONTAINS : {written_hi:7d} (MERGE 幂等)")
-    print(f"  [HI]   Ingredient-Target_TARGETS: {written_it:7d} (MERGE 幂等)")
+    print(f"  [HI]   HERB_CONTAINS_INGREDIENT : {written_hi:7d} source rows (MERGE 幂等)")
+    print(f"  [HI]   INGREDIENT_TARGETS       : {written_it:7d} source rows (MERGE 幂等)")
     return {"herb_ingredient": written_hi, "ingredient_target": written_it}
 
 
@@ -243,9 +255,9 @@ def write_fh_to_neo4j(database: str, dry_run: bool = False) -> dict:
 
     cypher = """
     UNWIND $batch AS row
-    MATCH (f:Formula {name_zh: row.formula_name})
-    MATCH (h:Herb_ITCM {name_zh: row.herb_name})
-    MERGE (f)-[r:CONTAINS]->(h)
+    MATCH (f:Formula {source_db: 'ITCM', name_zh: row.formula_name})
+    MATCH (h:Herb {source_db: 'ITCM', name_zh: row.herb_name})
+    MERGE (f)-[r:FORMULA_CONTAINS_HERB]->(h)
     RETURN count(r) AS n
     """
 

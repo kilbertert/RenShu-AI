@@ -1,16 +1,14 @@
 import contextlib
-import os
 
 from  fastapi import  FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from app.src.response.exception.global_exception import GlobalReOrExHandler
-from app.src.common.config.prosgresql_config import async_db_manager
+from app.src.common.config.prosgresql_config import async_db_manager, create_db_tables
+from app.src.common.config.setting_config import settings
 from app.src.response.response_middleware import ResponseMiddleware
 from app.src.utils import get_logger
-from app.src.controller import account_router, model_config_router, chat_router, conversation_router, tongue_analysis_router, case_router
+from app.src.controller import account_router, model_config_router, chat_router, conversation_router, tongue_analysis_router, attachment_router, case_router
 from app.src.middleware.auth_middleware import AuthContextMiddleware
-
-from app.src.common.config.prosgresql_config import create_db_tables
 
 # 🚀 企业级优化：引入 Redis 和 LLM 客户端池
 from app.src.common.config.redis_config import redis_manager
@@ -70,7 +68,8 @@ def _install_llm_http_debug():
         logger.warning(f"[LLM-HTTP-DEBUG] install failed: {e}")
 
 
-_install_llm_http_debug()
+if settings.LLM_HTTP_DEBUG:
+    _install_llm_http_debug()
 
 
 
@@ -79,13 +78,10 @@ _install_llm_http_debug()
 
 
 def add_middleware(app: FastAPI):
-    # CORS 配置:前端使用 Bearer token 而非 cookie,无需 allow_credentials=True。
-    # 之前 allow_origins=["*"] + allow_credentials=True 是 CORS 规范禁止的组合,
-    # 浏览器会在 Access-Control-Allow-Credentials: true + Access-Control-Allow-Origin: *
-    # 时直接拒绝跨域响应。ResponseMiddleware 已对每个响应补全 CORS 头作为兜底。
+    # 前端使用 Bearer token 而非 cookie；Origin 必须来自显式配置的白名单。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_allow_origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"]
@@ -94,7 +90,8 @@ def add_middleware(app: FastAPI):
     app.add_middleware(
         ResponseMiddleware,
         enable_tracing=True,
-        enable_request_id=True
+        enable_request_id=True,
+        allowed_origins=settings.cors_allow_origins,
     )
     # 添加认证上下文中间件（自动解析JWT并设置用户上下文）
     app.add_middleware(AuthContextMiddleware)
@@ -108,13 +105,19 @@ async  def init_resource():
 
       # 初始化 PostgreSQL 配置
       await async_db_manager.init()
+      await create_db_tables()
       logger.info("✅ PostgreSQL 初始化完成")
+
+      # LangGraph 必须在图首次编译前完成持久化 Checkpointer 初始化。
+      from app.src.agent.checkpointer import initialize_checkpointer
+      await initialize_checkpointer()
       
       # 初始化 Redis 缓存（可选）
       try:
-          redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-          redis_enabled = os.getenv("REDIS_ENABLED", "true").lower() == "true"
-          await redis_manager.init(redis_url=redis_url, enabled=redis_enabled)
+          await redis_manager.init(
+              redis_url=settings.REDIS_URL,
+              enabled=settings.REDIS_ENABLED,
+          )
           logger.info("✅ Redis 缓存初始化完成")
       except Exception as e:
           logger.warning(f"⚠️ Redis 初始化失败，降级为无缓存模式: {e}")
@@ -175,7 +178,7 @@ async def warmup_llm_clients():
 
 
 
-async def register_router(app:FastAPI):
+def register_router(app: FastAPI):
     #这里注册的是新版本的路由。
 
     logger.info("正在注册路由")
@@ -184,6 +187,7 @@ async def register_router(app:FastAPI):
     app.include_router(chat_router)
     app.include_router(conversation_router)
     app.include_router(tongue_analysis_router)
+    app.include_router(attachment_router)
     app.include_router(case_router)  # P2 病例库
 
     logger.info("注册路由完成")
@@ -200,8 +204,6 @@ async def life_span(app:FastAPI):
     try:
          # 初始化数据库和缓存
          await init_resource()
-         # 注册路由
-         await register_router(app)
          logger.info("✅ 应用启动完成，准备就绪")
          yield
     finally:
@@ -210,6 +212,9 @@ async def life_span(app:FastAPI):
          await redis_manager.close()
          # 关闭 LLM 客户端池
          await llm_client_pool.close_all()
+         # 关闭 LangGraph Checkpointer 连接池
+         from app.src.agent.checkpointer import close_checkpointer
+         await close_checkpointer()
          # 关闭数据库
          await async_db_manager.close()
          logger.info("✅ 应用关闭完成")
@@ -231,8 +236,6 @@ def create_app():
     logger.info("正在注册中间件")
     add_middleware(app)
     logger.info("注册中间件成功")
+    register_router(app)
     
     return app
-
-
-

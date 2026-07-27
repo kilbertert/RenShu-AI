@@ -20,8 +20,8 @@ except ImportError:
     sys.exit(1)
 
 # 直接使用提供的 API Key 和 Base URL（使用中转 API）
-GEMINI_API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-GEMINI_BASE_URL = "https://www.dmxapi.cn"  # 中转 API
+GEMINI_API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+GEMINI_BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 print(f"Gemini API Key: {GEMINI_API_KEY[:10]}...")
 print(f"Gemini Base URL: {GEMINI_BASE_URL if GEMINI_BASE_URL else 'Default (https://generativelanguage.googleapis.com)'}")

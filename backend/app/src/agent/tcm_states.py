@@ -33,7 +33,9 @@ TCMQueryType = Literal[
     "tcm-chat",      # 中医闲聊：普通对话、闲聊
     "tcm-wellness",  # 中医养生：日常养生、体质调理、季节养生
     "tcm-diagnose",  # 辨证问诊：症状分析、证型判断
+    "tcm-herb",      # 药材咨询：功效、用法与配伍安全
     "tcm-prescription",  # 方剂推荐：根据证型推荐方剂
+    "tcm-image",     # 舌像/图文分析
     "additional-info",   # 需要更多信息
 ]
 
@@ -117,6 +119,7 @@ class HerbInfo(BaseModel):
     indications: list[str] = Field(default_factory=list, description="主治")
     contraindications: list[str] = Field(default_factory=list, description="禁忌")
     dosage: str = Field(default="", description="用量")
+    sources: list[str] = Field(default_factory=list, description="知识图谱数据来源")
 
 
 class HerbCompatibilityResult(BaseModel):
@@ -178,9 +181,15 @@ class TongueAnalysisResult(BaseModel):
     tongue_color: str = Field(default="", description="舌色（淡红/红/绛/紫/淡白）")
     tongue_shape: str = Field(default="", description="舌形（胖大/瘦薄/齿痕/裂纹）")
     coating_color: str = Field(default="", description="苔色（白/黄/灰/黑）")
-    coating_texture: str = Field(default="", description="苔质（薄/厚/腻/燥/滑）")
+    coating_quality: str = Field(default="", description="苔质（薄/厚/腻/燥/滑）")
     analysis: str = Field(default="", description="舌诊分析")
     syndrome_hints: list[str] = Field(default_factory=list, description="证型提示")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    image_quality: str = Field(default="unknown")
+    source_attachment_id: Optional[str] = Field(default=None)
+    warning: str = Field(
+        default="舌象只能作为四诊合参的一部分，不能单独作为诊断或用药依据。"
+    )
 
 
 # ============== 模型配置 ==============
@@ -189,12 +198,26 @@ class LLMConfig(BaseModel):
     """LLM 模型配置"""
     provider_name: str = Field(default="", description="提供商名称 (openai/deepseek/ollama)")
     model_name: str = Field(default="", description="模型名称")
-    api_key: str = Field(default="", description="API Key")
+    api_key_encrypted: str = Field(
+        default="",
+        repr=False,
+        description="Fernet 加密后的 API Key；Checkpoint 中禁止保存明文",
+    )
     base_url: Optional[str] = Field(default=None, description="API Base URL")
     temperature: float = Field(default=0.7, description="温度参数")
     top_p: float = Field(default=1.0, description="Top-P 采样参数")
     max_tokens: int = Field(default=2000, description="最大 token 数")
     enable_thinking: bool = Field(default=False, description="是否启用思考过程展示（类似 Gemini 的推理过程）")
+
+    @property
+    def api_key(self) -> str:
+        """仅在创建 LLM 客户端的瞬间解密，不进入 Pydantic 序列化结果。"""
+        if not self.api_key_encrypted:
+            return ""
+        if self.api_key_encrypted == "ollama":
+            return "ollama"
+        from app.src.utils.auth_utils import decrypt_api_key
+        return decrypt_api_key(self.api_key_encrypted)
 
 
 # ============== 主状态定义 ==============
@@ -207,6 +230,18 @@ class TCMInputState(BaseModel):
     )
     user_id: str = Field(default="", description="用户ID")
     conversation_id: str = Field(default="", description="会话ID")
+    attachments: list[dict] = Field(
+        default_factory=list,
+        description="已鉴权的附件引用，不包含原始文件内容",
+    )
+    tongue_analysis: Optional[TongueAnalysisResult] = Field(
+        default=None,
+        description="当前消息附件产生的舌像分析结果",
+    )
+    report_analysis: Optional[dict] = Field(
+        default=None,
+        description="当前消息附件产生的医疗报告结构化结果",
+    )
 
     # 用户画像
     user_profile: dict = Field(
@@ -242,6 +277,10 @@ class TCMAgentState(TCMInputState):
         default=None,
         description="辨证结果"
     )
+    diagnosis_result: Optional[dict] = Field(
+        default=None,
+        description="完整结构化辨证结果（病例落库与审计使用）",
+    )
 
     # 查询结果
     herbs: Annotated[list[HerbInfo], reduce_list] = Field(
@@ -262,9 +301,10 @@ class TCMAgentState(TCMInputState):
     )
 
     # 图像分析
-    tongue_analysis: Optional[TongueAnalysisResult] = Field(
+    tongue_analysis: Optional[TongueAnalysisResult] = Field(default=None, description="舌诊分析结果")
+    report_analysis: Optional[dict] = Field(
         default=None,
-        description="舌诊分析结果"
+        description="医疗报告结构化解读结果",
     )
 
     # 校验结果
@@ -331,6 +371,10 @@ class TCMOutputState(BaseModel):
         default=None,
         description="辨证结果（如果有）"
     )
+    diagnosis_result: Optional[dict] = Field(
+        default=None,
+        description="完整结构化辨证结果",
+    )
     herbs: list[HerbInfo] = Field(
         default_factory=list,
         description="药材信息（如果有）"
@@ -350,6 +394,10 @@ class TCMOutputState(BaseModel):
     tongue_analysis: Optional[TongueAnalysisResult] = Field(
         default=None,
         description="舌诊分析（如果有）"
+    )
+    report_analysis: Optional[dict] = Field(
+        default=None,
+        description="医疗报告解读（如果有）",
     )
 
     # 追踪信息

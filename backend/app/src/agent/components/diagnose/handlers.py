@@ -11,11 +11,13 @@
 - 支持多轮追问、复杂度评估、分级辨证
 """
 
+import re
+
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphInterrupt
 
-from ...tcm_states import TCMAgentState
+from ...tcm_states import PrescriptionInfo, SyndromeResult, TCMAgentState
 from .builder import get_diagnose_graph
 from app.src.utils import get_logger
 
@@ -59,9 +61,21 @@ async def handle_diagnose_query(state: TCMAgentState, config: RunnableConfig) ->
         subgraph_input = {
             "query": last_user_query,
             "messages": list(messages),
+            "user_id": state.user_id,
+            "conversation_id": state.conversation_id,
+            "thread_id": config.get("configurable", {}).get("thread_id"),
             "user_profile": state.user_profile or {},
             "llm_config": state.llm_config,
             "extracted_entities": state.router.extracted_entities if state.router else {},
+            "tongue_analysis": (
+                state.tongue_analysis.model_dump(mode="json")
+                if state.tongue_analysis else None
+            ),
+            "report_analysis": (
+                state.report_analysis.model_dump(mode="json")
+                if hasattr(state.report_analysis, "model_dump")
+                else state.report_analysis
+            ),
         }
 
         # 调用诊断子图（传递 config 使子图事件传播到父图的 astream_events）
@@ -71,6 +85,7 @@ async def handle_diagnose_query(state: TCMAgentState, config: RunnableConfig) ->
         # 提取结果
         answer = result.get("answer", "")
         diagnosis_result = result.get("diagnosis_result")
+        diagnosis_error = result.get("error")
         steps = result.get("steps", [])
         follow_up_question = result.get("follow_up_question")
 
@@ -88,8 +103,43 @@ async def handle_diagnose_query(state: TCMAgentState, config: RunnableConfig) ->
 
         logger.info(f"诊断子图完成，步骤: {steps}")
 
+        syndrome_result = None
+        prescriptions = []
+        should_seek_doctor = False
+        if isinstance(diagnosis_result, dict):
+            syndrome_name = diagnosis_result.get("syndrome") or "未明确"
+            syndrome_result = SyndromeResult(
+                syndrome_name=syndrome_name,
+                confidence=float(diagnosis_result.get("confidence") or 0),
+                symptoms_matched=diagnosis_result.get("syndrome_evidence") or [],
+                treatment_principle=diagnosis_result.get("treatment_principle") or "",
+                recommended_prescriptions=[
+                    item.get("name")
+                    for item in diagnosis_result.get("prescriptions", [])
+                    if isinstance(item, dict) and item.get("name")
+                ],
+            )
+            for item in diagnosis_result.get("prescriptions", []) or []:
+                if not isinstance(item, dict) or not item.get("name"):
+                    continue
+                prescriptions.append(PrescriptionInfo(
+                    name=item["name"],
+                    source=item.get("source") or "",
+                    composition=item.get("composition") or [],
+                    effects=item.get("rationale") or "",
+                    usage=item.get("usage") or "",
+                    cautions=item.get("cautions") or [],
+                    syndrome=syndrome_name,
+                ))
+            should_seek_doctor = bool(diagnosis_result.get("should_seek_doctor"))
+
         return {
             "answer": answer,
+            "diagnosis_result": diagnosis_result,
+            "syndrome_result": syndrome_result,
+            "prescriptions": prescriptions,
+            "should_seek_doctor": should_seek_doctor,
+            "error": diagnosis_error,
             "user_profile": user_profile,
             "steps": steps or ["诊断处理: 完成中医问诊分析"],
         }
@@ -162,6 +212,8 @@ async def _fallback_diagnose(state: TCMAgentState, query: str, error: str) -> di
 
 def _extract_symptoms(text: str) -> list:
     """从文本中提取症状关键词"""
+    from .nodes.collect_info import _mention_is_negated
+
     symptom_keywords = [
         "头痛", "头晕", "发热", "咳嗽", "乏力", "失眠", "腹痛", "腹泻",
         "便秘", "恶心", "呕吐", "胸闷", "心悸", "气短", "盗汗", "自汗",
@@ -171,8 +223,10 @@ def _extract_symptoms(text: str) -> list:
 
     found = []
     for symptom in symptom_keywords:
-        if symptom in text:
-            found.append(symptom)
+        for match in re.finditer(re.escape(symptom), text):
+            if not _mention_is_negated(text, match.start(), symptom):
+                found.append(symptom)
+                break
 
     return found
 

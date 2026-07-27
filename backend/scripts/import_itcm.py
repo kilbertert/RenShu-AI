@@ -30,7 +30,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-ITCM_DIR = Path("D:/AI/project/RenShu-AI/TCM_Dataset/ITCM")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+ITCM_DIR = get_tcm_dataset_root() / "ITCM"
 BATCH_SIZE = 1000
 
 
@@ -53,7 +55,7 @@ class Stats:
 # ===== 各类型规格定义 =====
 
 HERB_SPEC = NodeTypeSpec(
-    label="Herb_ITCM",  # 用 _ITCM 后缀避免与 SymMap Herb 节点 PK 冲突
+    label="Herb",
     file_path=ITCM_DIR / "herb_detail.txt",
     pk_col="NID",
     field_map={
@@ -113,7 +115,7 @@ FORMULA_SPEC = NodeTypeSpec(
 )
 
 INGREDIENT_SPEC = NodeTypeSpec(
-    label="Ingredient_ITCM",  # 用 _ITCM 后缀避免与 SymMap Ingredient PK 冲突
+    label="Ingredient",
     file_path=ITCM_DIR / "ingredient_detail.txt",
     pk_col="NID",
     field_map={
@@ -135,7 +137,7 @@ INGREDIENT_SPEC = NodeTypeSpec(
 )
 
 TARGET_SPEC = NodeTypeSpec(
-    label="Target_ITCM",  # 用 _ITCM 后缀避免与 SymMap/HPOA Target PK 冲突
+    label="Target",
     file_path=ITCM_DIR / "target_detail.txt",
     pk_col="NID",
     field_map={
@@ -167,7 +169,7 @@ TARGET_SPEC = NodeTypeSpec(
 )
 
 DISEASE_SPEC = NodeTypeSpec(
-    label="Disease_ITCM",  # 用 _ITCM 后缀避免与 SymMap/HPOA Disease PK 冲突
+    label="Disease",
     file_path=ITCM_DIR / "disease_detail.txt",
     pk_col="NID",
     field_map={
@@ -208,6 +210,9 @@ def _project_row(headers: list[str], values: list[str], spec: NodeTypeSpec) -> d
         if isinstance(v, str) and v.strip() == "":
             continue
         out[dst] = v
+    if spec.label == "Target" and out.get("ncbi_id"):
+        out["ncbi_gene_id"] = f"NCBI:{str(out['ncbi_id']).strip()}"
+    out["source_db"] = "ITCM"
     return out
 
 
@@ -256,12 +261,10 @@ def collect_stats() -> Stats:
 def _cypher_upsert(spec: NodeTypeSpec) -> str:
     props = list(spec.field_map.values())
     pk_prop = props[0]
-    extra = [f"n.{p} = row.{p}" for p in props[1:]]
-    set_part = ", ".join(extra) if extra else ""
     cypher = f"""
     UNWIND $batch AS row
     MERGE (n:{spec.label} {{{pk_prop}: row.{pk_prop}}})
-    {"SET " + set_part if set_part else ""}
+    SET n += row
     """
     return cypher.strip()
 

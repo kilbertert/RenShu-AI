@@ -10,11 +10,67 @@ import json
 from typing import AsyncGenerator, Optional, Dict, Any
 
 from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.types import Command
+from langgraph.types import Command, Overwrite
 
 from .tcm_builder import build_tcm_graph, new_thread_id
 from .tcm_states import TCMInputState, TCMOutputState, LLMConfig
+from app.src.schema.attachment_schema import AttachmentContext
 from app.src.schema.chat_schema import StreamMessageType, NODE_DISPLAY_REGISTRY
+from app.src.response.exception.exceptions import AuthorizationException
+
+
+def _extract_stream_text(content: Any) -> str:
+    """从 OpenAI/Anthropic 流式内容中提取可展示文本。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return ""
+
+
+_INTERNAL_LLM_NODES = {
+    "analyze_and_route_query",
+    "collect_info",
+    "analyze_follow_up",
+    "assess_complexity",
+    # 辨证节点调用的是结构化 JSON 生成；患者版回答统一从最终 state.answer 输出。
+    "simple_diagnosis",
+    "moderate_diagnosis",
+    "complex_diagnosis",
+    "plan_queries",
+    "execute_query",
+    "synthesize_diagnosis",
+}
+
+
+def _is_user_visible_llm_event(event: dict[str, Any]) -> bool:
+    """内部分类/结构化推理不得作为最终回答流给前端。"""
+    node_name = event.get("metadata", {}).get("langgraph_node")
+    tags = set(event.get("tags") or [])
+    if "internal_structured_diagnosis" in tags:
+        return False
+    return node_name not in _INTERNAL_LLM_NODES
+
+
+def _extract_query_type(router_info: Any) -> Optional[str]:
+    """兼容字典与 Pydantic TCMRouter 的 query_type 读取。"""
+    if isinstance(router_info, dict):
+        value = router_info.get("query_type")
+    else:
+        value = getattr(router_info, "query_type", None)
+    return str(value) if value else None
+
+
+def _extract_unanswered_state_error(state: Any) -> Optional[str]:
+    """图执行失败且没有患者答案时，返回可显式透传的错误。"""
+    values = getattr(state, "values", {}) or {}
+    error = values.get("error")
+    answer = _extract_stream_text(values.get("answer", ""))
+    return str(error) if error and not answer else None
 
 
 class TCMAgentService:
@@ -35,6 +91,83 @@ class TCMAgentService:
         """获取线程配置"""
         return {"configurable": {"thread_id": thread_id}}
 
+    async def assert_thread_binding(
+        self,
+        thread_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Checkpoint 中已有身份时必须与当前认证会话一致。"""
+        state = await self.graph.aget_state(self.get_thread_config(thread_id))
+        values = state.values if state else {}
+        stored_user_id = values.get("user_id")
+        stored_conversation_id = values.get("conversation_id")
+        if stored_user_id and str(stored_user_id) != str(user_id):
+            raise AuthorizationException("LangGraph 线程不属于当前用户")
+        if stored_conversation_id and str(stored_conversation_id) != str(conversation_id):
+            raise AuthorizationException("LangGraph 线程不属于当前会话")
+
+    async def _prepare_new_turn(
+        self,
+        thread_id: str,
+        user_id: str,
+        conversation_id: str,
+        llm_config: Optional[LLMConfig] = None,
+    ) -> None:
+        """清空上一轮临时输出，并以本轮服务端配置覆盖旧 checkpoint。"""
+        config = self.get_thread_config(thread_id)
+        await self.assert_thread_binding(thread_id, user_id, conversation_id)
+        state = await self.graph.aget_state(config)
+        if not state or not state.values:
+            return
+        updates = {
+                "router": None,
+                "diagnose_stage": None,
+                "syndrome_result": None,
+                "diagnosis_result": None,
+                "herbs": Overwrite([]),
+                "prescriptions": Overwrite([]),
+                "classics": Overwrite([]),
+                "cases": Overwrite([]),
+                "tongue_analysis": None,
+                "report_analysis": None,
+                "compatibility_check": None,
+                "steps": Overwrite([]),
+                "cypher_queries": Overwrite([]),
+                "answer": "",
+                "error": None,
+                "jump_to": None,
+                "should_seek_doctor": False,
+            }
+        if llm_config is not None:
+            updates["llm_config"] = llm_config
+        await self.graph.aupdate_state(config, updates)
+
+    async def _append_checkpoint_messages(
+        self,
+        config: dict,
+        messages: list[Any],
+        state: Any = None,
+    ) -> None:
+        """把中断问题、resume 回答和最终回复补入父图消息历史。"""
+        if not messages:
+            return
+        if state is None:
+            state = await self.graph.aget_state(config)
+        existing = list((getattr(state, "values", {}) or {}).get("messages", []))
+        pending: list[Any] = []
+        for message in messages:
+            previous = pending[-1] if pending else (existing[-1] if existing else None)
+            if (
+                previous is not None
+                and getattr(previous, "type", None) == getattr(message, "type", None)
+                and getattr(previous, "content", None) == getattr(message, "content", None)
+            ):
+                continue
+            pending.append(message)
+        if pending:
+            await self.graph.aupdate_state(config, {"messages": pending})
+
     async def chat_with_tcm_agent(
         self,
         message: str,
@@ -42,6 +175,9 @@ class TCMAgentService:
         conversation_id: Optional[str] = None,
         user_profile: Optional[dict] = None,
         thread_id: Optional[str] = None,
+        attachments: Optional[list[AttachmentContext | dict]] = None,
+        tongue_analysis: Optional[dict] = None,
+        report_analysis: Optional[dict] = None,
         # 新增：模型配置参数
         provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
@@ -73,6 +209,7 @@ class TCMAgentService:
         """
         thread_id = thread_id or new_thread_id()
         config = self.get_thread_config(thread_id)
+        conversation_id = conversation_id or str(uuid.uuid4())
 
         # 构建 LLM 配置
         llm_config = None
@@ -80,32 +217,44 @@ class TCMAgentService:
             llm_config = LLMConfig(
                 provider_name=provider_name,
                 model_name=model_name,
-                api_key=api_key or "",
+                api_key_encrypted=api_key or "",
                 base_url=base_url,
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
             )
+        await self._prepare_new_turn(
+            thread_id,
+            user_id,
+            conversation_id,
+            llm_config=llm_config,
+        )
 
         input_state = TCMInputState(
             messages=[HumanMessage(content=message)],
             user_id=user_id,
-            conversation_id=conversation_id or str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            attachments=attachments or [],
+            tongue_analysis=tongue_analysis,
+            report_analysis=report_analysis,
             user_profile=user_profile or {},
             llm_config=llm_config,
         )
 
         result = await self.graph.ainvoke(input_state, config)
 
+        query_type = _extract_query_type(result.get("router")) or "tcm-chat"
         return TCMOutputState(
             answer=result.get("answer", ""),
-            query_type=result.get("router", {}).get("query_type", "tcm-chat") if result.get("router") else "tcm-chat",
+            query_type=query_type,
             syndrome_result=result.get("syndrome_result"),
+            diagnosis_result=result.get("diagnosis_result"),
             herbs=result.get("herbs", []),
             prescriptions=result.get("prescriptions", []),
             classics=result.get("classics", []),
             cases=result.get("cases", []),
             tongue_analysis=result.get("tongue_analysis"),
+            report_analysis=result.get("report_analysis"),
             steps=result.get("steps", []),
             cypher_queries=result.get("cypher_queries", []),
             follow_up_questions=[],
@@ -119,6 +268,9 @@ class TCMAgentService:
         conversation_id: Optional[str] = None,
         user_profile: Optional[dict] = None,
         thread_id: Optional[str] = None,
+        attachments: Optional[list[AttachmentContext | dict]] = None,
+        tongue_analysis: Optional[dict] = None,
+        report_analysis: Optional[dict] = None,
         # 新增：模型配置参数
         provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
@@ -146,6 +298,7 @@ class TCMAgentService:
         """
         thread_id = thread_id or new_thread_id()
         config = self.get_thread_config(thread_id)
+        conversation_id = conversation_id or str(uuid.uuid4())
 
         # 构建 LLM 配置
         llm_config = None
@@ -153,18 +306,27 @@ class TCMAgentService:
             llm_config = LLMConfig(
                 provider_name=provider_name,
                 model_name=model_name,
-                api_key=api_key or "",
+                api_key_encrypted=api_key or "",
                 base_url=base_url,
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
                 enable_thinking=enable_thinking,
             )
+        await self._prepare_new_turn(
+            thread_id,
+            user_id,
+            conversation_id,
+            llm_config=llm_config,
+        )
 
         input_state = TCMInputState(
             messages=[HumanMessage(content=message)],
             user_id=user_id,
-            conversation_id=conversation_id or str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            attachments=attachments or [],
+            tongue_analysis=tongue_analysis,
+            report_analysis=report_analysis,
             user_profile=user_profile or {},
             llm_config=llm_config,
         )
@@ -173,6 +335,8 @@ class TCMAgentService:
         processed_nodes: set[str] = set()
         query_type = "tcm-chat"
         executed_steps: list[str] = []
+        streamed_content = False
+        streamed_chunks: list[str] = []
 
         try:
             # 发送 thread_id 给前端，用于后续 resume
@@ -193,34 +357,81 @@ class TCMAgentService:
 
                 # === 2. LLM Token 流：逐 token 输出内容 ===
                 elif event_kind == "on_chat_model_stream":
+                    if not _is_user_visible_llm_event(event):
+                        continue
                     chunk = event_data.get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
-                        yield json.dumps({
-                            "type": StreamMessageType.CONTENT.value,
-                            "content": chunk.content,
-                        }, ensure_ascii=False)
+                        content = _extract_stream_text(chunk.content)
+                        if content:
+                            streamed_content = True
+                            streamed_chunks.append(content)
+                            yield json.dumps({
+                                "type": StreamMessageType.CONTENT.value,
+                                "content": content,
+                            }, ensure_ascii=False)
 
                 # === 3. 提取路由信息（从 on_chain_end 中获取 query_type）===
                 elif event_kind == "on_chain_end":
                     output = event_data.get("output", {})
                     if isinstance(output, dict) and "router" in output and output["router"]:
-                        router_info = output["router"]
-                        if isinstance(router_info, dict) and "query_type" in router_info:
-                            query_type = router_info["query_type"]
+                        routed_type = _extract_query_type(output["router"])
+                        if routed_type:
+                            query_type = routed_type
 
             # 检查是否被 interrupt 暂停
             state = await self.graph.aget_state(config)
+            if state:
+                routed_type = _extract_query_type(state.values.get("router"))
+                if routed_type:
+                    query_type = routed_type
             if state and state.tasks:
                 for task in state.tasks:
                     if task.interrupts:
                         interrupt_value = task.interrupts[0].value
+                        question = interrupt_value.get("question", "")
+                        if question:
+                            await self._append_checkpoint_messages(
+                                config,
+                                [AIMessage(content=question)],
+                                state,
+                            )
                         yield json.dumps({
                             "type": "interrupt",
-                            "question": interrupt_value.get("question", ""),
+                            "question": question,
                             "action": interrupt_value.get("action", ""),
                             "thread_id": thread_id,
                         }, ensure_ascii=False)
                         return  # 不发 done，前端知道需要等待用户输入
+
+            state_error = _extract_unanswered_state_error(state)
+            if state_error:
+                yield json.dumps({
+                    "type": StreamMessageType.ERROR.value,
+                    "content": state_error,
+                }, ensure_ascii=False)
+                return
+
+            final_answer = _extract_stream_text(state.values.get("answer", "")) if state else ""
+            final_answer = final_answer or "".join(streamed_chunks)
+            if not streamed_content and state:
+                if final_answer:
+                    yield json.dumps({
+                        "type": StreamMessageType.CONTENT.value,
+                        "content": final_answer,
+                    }, ensure_ascii=False)
+
+            if final_answer:
+                await self._append_checkpoint_messages(
+                    config,
+                    [AIMessage(content=final_answer)],
+                    state,
+                )
+
+            if state and state.values.get("diagnosis_result"):
+                yield json.dumps({
+                    "type": "diagnosis_result",
+                    "data": state.values["diagnosis_result"],
+                }, ensure_ascii=False)
 
             # 发送完成消息
             yield json.dumps({
@@ -235,7 +446,17 @@ class TCMAgentService:
                 "content": str(e),
             }, ensure_ascii=False)
 
-    async def resume_stream(self, thread_id: str, user_answer: str) -> AsyncGenerator[str, None]:
+    async def resume_stream(
+        self,
+        thread_id: str,
+        user_answer: str,
+        user_id: str,
+        conversation_id: str,
+        attachments: Optional[list[AttachmentContext | dict]] = None,
+        tongue_analysis: Optional[dict] = None,
+        report_analysis: Optional[dict] = None,
+        llm_config: Optional[LLMConfig] = None,
+    ) -> AsyncGenerator[str, None]:
         """用户回答追问后，恢复图执行
 
         Args:
@@ -246,13 +467,54 @@ class TCMAgentService:
             str: JSON 格式的流式消息
         """
         config = self.get_thread_config(thread_id)
+        await self.assert_thread_binding(thread_id, user_id, conversation_id)
+        effective_answer = user_answer.strip() or (
+            "我已上传舌像，请结合舌像继续问诊。"
+            if tongue_analysis
+            else "我已上传医疗报告，请结合报告继续问诊。"
+            if report_analysis
+            else "请继续问诊。"
+        )
+
+        # 父图状态与暂停中的诊断子图都要收到本轮安全附件语义。
+        state_update: dict[str, Any] = {}
+        if llm_config is not None:
+            state_update["llm_config"] = llm_config
+        if attachments:
+            state_update["attachments"] = attachments
+        if tongue_analysis:
+            state_update["tongue_analysis"] = tongue_analysis
+        if report_analysis:
+            state_update["report_analysis"] = report_analysis
+        if state_update:
+            await self.graph.aupdate_state(config, state_update)
+
+        resume_value: Any = effective_answer
+        if attachments or tongue_analysis or report_analysis or llm_config:
+            resume_value = {
+                "text": effective_answer,
+                "attachments": [
+                    item.model_dump(mode="json")
+                    if isinstance(item, AttachmentContext) else item
+                    for item in (attachments or [])
+                ],
+                "tongue_analysis": tongue_analysis,
+                "llm_config": (
+                    llm_config.model_dump(mode="json")
+                    if llm_config is not None else None
+                ),
+            }
+            if report_analysis:
+                resume_value["report_analysis"] = report_analysis
         processed_nodes: set[str] = set()
         query_type = "tcm-chat"
         executed_steps: list[str] = []
+        streamed_content = False
+        streamed_chunks: list[str] = []
 
         try:
             async for event in self.graph.astream_events(
-                Command(resume=user_answer), config, version="v2"
+                Command(resume=resume_value), config, version="v2"
             ):
                 event_kind = event.get("event")
                 event_name = event.get("name", "")
@@ -268,34 +530,81 @@ class TCMAgentService:
 
                 # LLM Token 流
                 elif event_kind == "on_chat_model_stream":
+                    if not _is_user_visible_llm_event(event):
+                        continue
                     chunk = event_data.get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
-                        yield json.dumps({
-                            "type": StreamMessageType.CONTENT.value,
-                            "content": chunk.content,
-                        }, ensure_ascii=False)
+                        content = _extract_stream_text(chunk.content)
+                        if content:
+                            streamed_content = True
+                            streamed_chunks.append(content)
+                            yield json.dumps({
+                                "type": StreamMessageType.CONTENT.value,
+                                "content": content,
+                            }, ensure_ascii=False)
 
                 # 提取路由信息
                 elif event_kind == "on_chain_end":
                     output = event_data.get("output", {})
                     if isinstance(output, dict) and "router" in output and output["router"]:
-                        router_info = output["router"]
-                        if isinstance(router_info, dict) and "query_type" in router_info:
-                            query_type = router_info["query_type"]
+                        routed_type = _extract_query_type(output["router"])
+                        if routed_type:
+                            query_type = routed_type
 
             # 检查是否再次 interrupt（多轮追问）
             state = await self.graph.aget_state(config)
+            if state:
+                routed_type = _extract_query_type(state.values.get("router"))
+                if routed_type:
+                    query_type = routed_type
             if state and state.tasks:
                 for task in state.tasks:
                     if task.interrupts:
                         interrupt_value = task.interrupts[0].value
+                        question = interrupt_value.get("question", "")
+                        checkpoint_messages = [HumanMessage(content=effective_answer)]
+                        if question:
+                            checkpoint_messages.append(AIMessage(content=question))
+                        await self._append_checkpoint_messages(
+                            config,
+                            checkpoint_messages,
+                            state,
+                        )
                         yield json.dumps({
                             "type": "interrupt",
-                            "question": interrupt_value.get("question", ""),
+                            "question": question,
                             "action": interrupt_value.get("action", ""),
                             "thread_id": thread_id,
                         }, ensure_ascii=False)
                         return
+
+            state_error = _extract_unanswered_state_error(state)
+            if state_error:
+                yield json.dumps({
+                    "type": StreamMessageType.ERROR.value,
+                    "content": state_error,
+                }, ensure_ascii=False)
+                return
+
+            final_answer = _extract_stream_text(state.values.get("answer", "")) if state else ""
+            final_answer = final_answer or "".join(streamed_chunks)
+            if not streamed_content and state:
+                if final_answer:
+                    yield json.dumps({
+                        "type": StreamMessageType.CONTENT.value,
+                        "content": final_answer,
+                    }, ensure_ascii=False)
+
+            checkpoint_messages = [HumanMessage(content=effective_answer)]
+            if final_answer:
+                checkpoint_messages.append(AIMessage(content=final_answer))
+            await self._append_checkpoint_messages(config, checkpoint_messages, state)
+
+            if state and state.values.get("diagnosis_result"):
+                yield json.dumps({
+                    "type": "diagnosis_result",
+                    "data": state.values["diagnosis_result"],
+                }, ensure_ascii=False)
 
             yield json.dumps({
                 "type": StreamMessageType.DONE.value,

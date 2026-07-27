@@ -88,6 +88,8 @@ class AuthContextMiddleware:
 
                     # 从数据库加载用户角色
                     roles = await self._load_user_roles(user_id)
+                    if not roles:
+                        raise ValueError("账户不存在、已禁用或角色加载失败")
 
                     # 根据角色计算权限
                     permissions = self._calculate_permissions(roles)
@@ -120,24 +122,24 @@ class AuthContextMiddleware:
         try:
             # 检查数据库是否已初始化
             if async_db_manager.async_session_factory is None:
-                logger.warning("数据库尚未初始化，返回默认角色")
-                return ["patient"]
+                logger.warning("数据库尚未初始化，拒绝建立认证上下文")
+                return []
 
             # 使用 async_db_manager 获取会话
             async with async_db_manager.get_session() as session:
-                stmt = select(Account.account_type).where(Account.id == user_id)
+                stmt = select(Account.account_type, Account.is_active).where(Account.id == user_id)
                 result = await session.exec(stmt)
-                account_type = result.one_or_none()
+                account = result.first()
 
-                if account_type:
-                    return [account_type]
+                if account and account[1]:
+                    return [account[0]]
 
-                logger.warning(f"未找到账户 {user_id} 的角色信息")
-                return ["patient"]  # 默认角色
+                logger.warning(f"未找到有效账户 {user_id} 的角色信息")
+                return []
 
         except Exception as e:
             logger.error(f"加载用户角色失败: {e}")
-            return ["patient"]  # 出错时返回默认角色
+            return []
 
     def _calculate_permissions(self, roles: list[str]) -> list[str]:
         """

@@ -21,7 +21,7 @@ async def respond_to_general_query(state: TCMAgentState) -> dict:
     try:
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
-            *messages[-5:],  # 保留最近5条消息作为上下文
+            *messages[-12:],  # 保留最近多轮用户/助手消息作为上下文
         ])
 
         return {

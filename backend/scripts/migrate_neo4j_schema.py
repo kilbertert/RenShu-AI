@@ -10,16 +10,25 @@ Neo4j 知识图谱关系改造脚本
   症状 → 指示 → 证候 → 治以 → 方剂
 """
 
+import sys
+from pathlib import Path
+
 from neo4j import GraphDatabase
 
-# Neo4j 连接配置
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "200102242519PyL"
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.src.common.config.setting_config import settings
 
 
 def migrate_schema():
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    if not settings.NEO4J_PASSWORD:
+        raise RuntimeError("NEO4J_PASSWORD 未配置")
+    driver = GraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+    )
 
     with driver.session() as session:
         print("=" * 60)

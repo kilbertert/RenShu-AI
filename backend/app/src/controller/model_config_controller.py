@@ -6,7 +6,9 @@
 """
 
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Request,Query
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from app.src.dependencies.dependency import LanguageModelServiceDep, get_model_provider_service
 from app.src.response.response_models import BaseResponse
 from app.src.schema.model_config_schema import (
@@ -23,9 +25,24 @@ from app.src.service.language_model_service import ModelProviderService
 
 from app.src.dependencies.dependency import get_model_config_service
 from app.src.service.language_model_service import ModelConfigService
+from app.src.common.context import get_current_user_id, get_user_roles
+from app.src.common.decorators import require_login
 
 router = APIRouter(prefix="/api/v1", tags=["模型配置"])
 logger = get_logger("model_config_controller")
+
+
+def _get_authenticated_identity() -> tuple[UUID, bool]:
+    """读取经过中间件认证的用户身份，禁止 None/非法 UUID 下沉到服务层。"""
+    raw_user_id = get_current_user_id()
+    if not raw_user_id:
+        raise HTTPException(status_code=401, detail="请先登录")
+    try:
+        user_id = UUID(str(raw_user_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="登录身份无效") from exc
+    is_admin = bool({"admin", "super_admin"}.intersection(get_user_roles()))
+    return user_id, is_admin
 
 
 
@@ -50,11 +67,7 @@ async def get_providers_with_models(
     request_id = request.state.request_id
 
     # 获取当前用户信息（如果已登录）
-    from app.src.common.context import get_current_user_id
-    try:
-        user_id = get_current_user_id()
-    except:
-        user_id = None
+    user_id = get_current_user_id()
 
     # 获取整合后的数据
     result = await model_service.get_providers_with_models(user_id=user_id)
@@ -87,11 +100,7 @@ async def get_providers_filtered(
     request_id = request.state.request_id
 
     # 获取当前用户信息（如果已登录）
-    from app.src.common.context import get_current_user_id
-    try:
-        user_id = get_current_user_id()
-    except:
-        user_id = None
+    user_id = get_current_user_id()
 
     # 获取整合后的数据
     result = await model_service.get_providers_with_models_filtered(user_id=user_id, provider_type=type)
@@ -141,6 +150,7 @@ async def get_builtin_providers_with_models(
     summary="创建供应商",
     response_model=BaseResponse[dict]
 )
+@require_login
 async def create_provider(
     request: Request,
     data: ModelProviderCreate,
@@ -153,21 +163,7 @@ async def create_provider(
     client_ip = request.state.client_ip
     request_id = request.state.request_id
 
-    from app.src.common.context import get_user_roles, get_current_user_id
-    
-    # 获取上下文信息
-    roles = []
-    user_id = None
-    try:
-        roles = get_user_roles()
-        user_id = get_current_user_id()
-    except:
-        pass
-        
-    is_admin = "admin" in roles
-    if not user_id:
-        # 如果未登录且无法获取ID，可能需要抛出异常或处理
-        pass
+    user_id, is_admin = _get_authenticated_identity()
 
     # 调用 Service 安全方法
     provider = await provider_service.create_provider_safe(data, user_id, is_admin)
@@ -185,6 +181,7 @@ async def create_provider(
     summary="更新供应商",
     response_model=BaseResponse[dict]
 )
+@require_login
 async def update_provider(
     request: Request,
     data: ModelProviderUpdate,
@@ -197,17 +194,7 @@ async def update_provider(
     client_ip = request.state.client_ip
     request_id = request.state.request_id
 
-    from app.src.common.context import get_user_roles, get_current_user_id
-    
-    roles = []
-    user_id = None
-    try:
-        roles = get_user_roles()
-        user_id = get_current_user_id()
-    except:
-        pass
-        
-    is_admin = "admin" in roles
+    user_id, is_admin = _get_authenticated_identity()
     
     result = await provider_service.update_provider_safe(data.provider_id, data, user_id, is_admin)
     
@@ -232,6 +219,7 @@ async def update_provider(
     summary="删除供应商",
     response_model=BaseResponse[None]
 )
+@require_login
 async def delete_provider(
     request: Request,
     data: ModelProviderDelete,
@@ -245,17 +233,7 @@ async def delete_provider(
     client_ip = request.state.client_ip
     request_id = request.state.request_id
 
-    from app.src.common.context import get_user_roles, get_current_user_id
-    
-    roles = []
-    user_id = None
-    try:
-        roles = get_user_roles()
-        user_id = get_current_user_id()
-    except:
-        pass
-    
-    is_admin = "admin" in roles
+    user_id, is_admin = _get_authenticated_identity()
     
     # 调用 Service 安全方法
     await provider_service.delete_provider_safe(data.provider_id, user_id, is_admin)
@@ -272,6 +250,7 @@ async def delete_provider(
     summary="验证供应商API Key",
     response_model=BaseResponse[dict]
 )
+@require_login
 async def verify_provider_api_key(
     request: Request,
     data: ProviderApiKeyVerify,
@@ -298,6 +277,7 @@ async def verify_provider_api_key(
     summary="创建模型配置",
     response_model=BaseResponse[dict]
 )
+@require_login
 async def create_model_config(
     request: Request,
     data: ModelConfigCreate,
@@ -310,17 +290,7 @@ async def create_model_config(
     client_ip = request.state.client_ip
     request_id = request.state.request_id
     
-    from app.src.common.context import get_user_roles, get_current_user_id
-    
-    roles = []
-    user_id = None
-    try:
-        roles = get_user_roles()
-        user_id = get_current_user_id()
-    except:
-        pass
-    
-    is_admin = "admin" in roles
+    user_id, is_admin = _get_authenticated_identity()
 
     # 调用 Service 安全方法
     config = await model_config_service.create_model_config_safe(data, user_id, is_admin)
@@ -338,6 +308,7 @@ async def create_model_config(
     summary="更新模型配置",
     response_model=BaseResponse[dict]
 )
+@require_login
 async def update_model_config(
     request: Request,
     data: ModelConfigUpdate,
@@ -350,17 +321,7 @@ async def update_model_config(
     client_ip = request.state.client_ip
     request_id = request.state.request_id
 
-    from app.src.common.context import get_user_roles, get_current_user_id
-    
-    roles = []
-    user_id = None
-    try:
-        roles = get_user_roles()
-        user_id = get_current_user_id()
-    except:
-        pass
-    
-    is_admin = "admin" in roles
+    user_id, is_admin = _get_authenticated_identity()
     
     # 调用 Service 安全方法
     result = await model_config_service.update_model_config_safe(
@@ -390,6 +351,7 @@ async def update_model_config(
     summary="删除模型配置",
     response_model=BaseResponse[None]
 )
+@require_login
 async def delete_model_config(
     request: Request,
     data: ModelConfigDelete,
@@ -402,17 +364,7 @@ async def delete_model_config(
     client_ip = request.state.client_ip
     request_id = request.state.request_id
 
-    from app.src.common.context import get_user_roles, get_current_user_id
-    
-    roles = []
-    user_id = None
-    try:
-        roles = get_user_roles()
-        user_id = get_current_user_id()
-    except:
-        pass
-    
-    is_admin = "admin" in roles
+    user_id, is_admin = _get_authenticated_identity()
 
     # 调用 Service 安全方法
     await model_config_service.delete_model_config_safe(

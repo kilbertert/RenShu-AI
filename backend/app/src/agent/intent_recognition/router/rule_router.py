@@ -73,6 +73,39 @@ class RuleBasedRouter:
         "立冬", "小雪", "大雪", "冬至", "小寒", "大寒",
     ]
 
+    # 患者常用口语。这里仅用于确定“这是在描述本人不适”，不承担辨证。
+    # 保持相对宽覆盖，避免分类模型故障时把真实医疗主诉拒之门外。
+    SYMPTOM_TERMS = [
+        "不舒服", "不适", "难受", "疼", "痛", "发热", "发烧", "怕冷", "怕热",
+        "发冷", "咳嗽", "气短", "胸闷", "胸痛", "心悸", "心慌", "恶心", "呕吐",
+        "头痛", "头晕", "眩晕", "乏力", "疲倦", "没精神", "没劲", "腰酸", "腰痛",
+        "耳鸣", "腹胀", "肚子胀", "腹痛", "胃痛", "腹泻", "便溏", "便秘",
+        "大便偏稀", "大便干", "尿频", "夜尿", "失眠", "多梦", "易醒", "睡不踏实",
+        "食欲差", "食欲不振", "没胃口", "口干", "口苦", "盗汗", "自汗", "出冷汗",
+        "月经", "经期", "白带", "怀孕", "妊娠",
+    ]
+
+    PERSONAL_HEALTH_MARKERS = (
+        "我", "本人", "患者", "家人", "孩子", "老人", "最近", "近来", "这几天",
+        "这段时间", "已经", "持续", "反复", "总是", "容易", "帮我", "给我看看",
+        "怎么办", "什么问题", "什么原因",
+    )
+
+    # “不舒服/发热/运行慢”等词也可能描述设备。纯非医疗语境必须先于
+    # 宽泛症状规则处理；若同时出现明确人体症状，则仍允许进入问诊。
+    NON_MEDICAL_CONTEXT_TERMS = (
+        "电脑", "手机", "代码", "程序", "软件", "操作系统", "电脑系统",
+        "网络", "网页", "浏览器", "打印机", "服务器", "数据库", "汽车",
+        "机器", "设备", "路由器", "天气",
+    )
+    HUMAN_SPECIFIC_SYMPTOM_TERMS = (
+        "头痛", "头晕", "眩晕", "咳嗽", "气短", "胸闷", "胸痛", "心悸",
+        "心慌", "恶心", "呕吐", "腰酸", "腰痛", "耳鸣", "腹胀", "腹痛",
+        "胃痛", "腹泻", "便溏", "便秘", "尿频", "夜尿", "失眠", "多梦",
+        "易醒", "食欲差", "没胃口", "口干", "口苦", "盗汗", "自汗",
+        "月经", "经期", "白带", "怀孕", "妊娠", "眼睛疼", "咽痛", "皮疹",
+    )
+
     # ============== 意图匹配规则 ==============
 
     def __init__(self):
@@ -118,6 +151,7 @@ class RuleBasedRouter:
             "herb_compatibility": [
                 re.compile(r"(" + herb_pattern + r").*?(不能|禁忌|相克|能不能|可以.*一起)", re.IGNORECASE),
                 re.compile(r"(" + herb_pattern + r").*?和.*?(" + herb_pattern + r").*?(一起|配伍|搭配)", re.IGNORECASE),
+                re.compile(r"(十八反|十九畏|配伍禁忌|中药相反|中药相畏)", re.IGNORECASE),
             ],
             # 古籍检索
             "classics_query": [
@@ -136,6 +170,41 @@ class RuleBasedRouter:
                 re.compile(r"(中医|中药).*(是什么|介绍|历史|发展|特点|理论|基础|区别|对比|和.*的关系)", re.IGNORECASE),
                 re.compile(r"(五行|阴阳|八纲|六淫|七情|气血|经络|脏腑).*(是什么|有哪些|包括|含义|概念)", re.IGNORECASE),
                 re.compile(r"(中医.*西医|西医.*中医).*(区别|对比|不同|差异)", re.IGNORECASE),
+            ],
+            # 明确要求结合本人症状进行辨证/问诊时，直接进入诊断流程。
+            # 这类输入无需再调用 LLM 分类器，可避免兼容网关结构化输出波动。
+            "diagnosis_explicit": [
+                re.compile(
+                    r"(?:请)?按(?:照)?中医(?:进行)?(?:辨证|问诊|诊断)(?:分析|看看|一下)?",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    r"(?:请|帮我|麻烦|给我|为我).{0,16}"
+                    r"(?:中医)?(?:辨证|问诊|诊断)(?:分析|看看|一下)?",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    r"(我|本人|患者|最近|近来|这几天|这段时间).*(辨证|问诊|诊断|症状分析)",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    r"(症状|不舒服|不适|病情).*(辨证|问诊|诊断|分析)",
+                    re.IGNORECASE,
+                ),
+            ],
+            # 未收录在方剂实体表中的名称也必须进入方剂查询，由知识图谱明确回答
+            # “未找到”，不能因分类模型不可用而停在通用澄清。
+            "prescription_generic_query": [
+                re.compile(
+                    r"([\u4e00-\u9fff]{2,16}(?:汤|丸|散|饮|丹|膏|方))"
+                    r"(?:是什么|有吗|是否存在|的?(?:出处|组成|成分|功效|主治|剂量|用法|介绍))",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    r"(?:什么是|介绍(?:一下)?|查询|查一下)[“\"]?"
+                    r"([\u4e00-\u9fff]{2,16}(?:汤|丸|散|饮|丹|膏|方))[”\"]?",
+                    re.IGNORECASE,
+                ),
             ],
         }
 
@@ -169,6 +238,13 @@ class RuleBasedRouter:
         if prescription_matches:
             entities.prescriptions = list(set(prescription_matches))
 
+        for pattern in self._intent_patterns.get("prescription_generic_query", []):
+            match = pattern.search(query)
+            if match:
+                name = match.group(1).strip("“”\"'")
+                if name and name not in entities.prescriptions:
+                    entities.prescriptions.append(name)
+
         # 提取药材名
         herb_matches = self._herb_re.findall(query)
         if herb_matches:
@@ -183,8 +259,20 @@ class RuleBasedRouter:
 
     def _match_intent(self, query: str, entities: ExtractedEntities) -> Optional[IntentClassification]:
         """匹配意图"""
-        
-        # 0. 中医基础知识科普
+
+        # 0. 纯非医疗语境优先，避免“电脑不舒服/运行慢”命中患者主诉。
+        if self._is_pure_non_medical_query(query):
+            return IntentClassification(
+                primary_intent=IntentType.GENERAL,
+                confidence=0.99,
+                sub_type="non_medical_clarify",
+                entities=entities,
+                reasoning="规则匹配：纯非医疗设备或技术语境",
+                route_source="rule",
+                sentiment=SentimentAnalysis(),
+            )
+
+        # 1. 中医基础知识科普
         for pattern in self._intent_patterns["tcm_knowledge"]:
             if pattern.search(query):
                 return IntentClassification(
@@ -196,7 +284,49 @@ class RuleBasedRouter:
                     route_source="rule",
                     sentiment=SentimentAnalysis(),
                 )
-        # 1. 方剂查询（有方剂名 + 查询动作）
+
+        # 2. 明确的本人症状辨证请求
+        for pattern in self._intent_patterns["diagnosis_explicit"]:
+            if pattern.search(query):
+                return IntentClassification(
+                    primary_intent=IntentType.DIAGNOSIS,
+                    confidence=0.96,
+                    sub_type="comprehensive",
+                    entities=entities,
+                    reasoning="规则匹配：明确要求结合本人症状进行辨证分析",
+                    route_source="rule",
+                    sentiment=SentimentAnalysis(),
+                )
+
+        # 3. 未知/虚构方名同样进入真实方剂检索，让知识层明确回答“未找到”。
+        for pattern in self._intent_patterns["prescription_generic_query"]:
+            if pattern.search(query):
+                return IntentClassification(
+                    primary_intent=IntentType.PRESCRIPTION,
+                    confidence=0.94,
+                    sub_type="query",
+                    entities=entities,
+                    reasoning="规则匹配：疑似方剂名称查询",
+                    route_source="rule",
+                    sentiment=SentimentAnalysis(),
+                )
+
+        # 4. 患者口语主诉。至少包含一个症状/不适词，并具有本人、病程或求助语境。
+        symptom_hits = [term for term in self.SYMPTOM_TERMS if term in query]
+        has_personal_context = any(marker in query for marker in self.PERSONAL_HEALTH_MARKERS)
+        if symptom_hits and (has_personal_context or len(symptom_hits) >= 2):
+            entities.symptoms = list(dict.fromkeys([*entities.symptoms, *symptom_hits]))
+            return IntentClassification(
+                primary_intent=IntentType.DIAGNOSIS,
+                confidence=0.93,
+                sub_type="symptom",
+                entities=entities,
+                reasoning="规则匹配：患者口语症状主诉",
+                route_source="rule",
+                sentiment=SentimentAnalysis(),
+            )
+
+        # 5. 方剂查询（有方剂名 + 查询动作）
         for pattern in self._intent_patterns["prescription_query"]:
             if pattern.search(query):
                 return IntentClassification(
@@ -209,7 +339,7 @@ class RuleBasedRouter:
                     sentiment=SentimentAnalysis(),
                 )
 
-        # 2. 方剂推荐（证型/症状 + 推荐方剂）
+        # 6. 方剂推荐（证型/症状 + 推荐方剂）
         for pattern in self._intent_patterns["prescription_recommend"]:
             if pattern.search(query):
                 return IntentClassification(
@@ -222,7 +352,7 @@ class RuleBasedRouter:
                     sentiment=SentimentAnalysis(),
                 )
 
-        # 3. 药材配伍禁忌（优先级高于功效查询）
+        # 6. 药材配伍禁忌（优先级高于功效查询）
         for pattern in self._intent_patterns["herb_compatibility"]:
             if pattern.search(query):
                 return IntentClassification(
@@ -235,7 +365,7 @@ class RuleBasedRouter:
                     sentiment=SentimentAnalysis(),
                 )
 
-        # 4. 药材功效查询
+        # 7. 药材功效查询
         for pattern in self._intent_patterns["herb_effect"]:
             if pattern.search(query):
                 return IntentClassification(
@@ -248,7 +378,7 @@ class RuleBasedRouter:
                     sentiment=SentimentAnalysis(),
                 )
 
-        # 5. 养生L1（简单养生）
+        # 8. 养生L1（简单养生）
         for pattern in self._intent_patterns["wellness_l1"]:
             if pattern.search(query):
                 return IntentClassification(
@@ -266,7 +396,7 @@ class RuleBasedRouter:
                     ),
                 )
 
-        # 6. 纯实体匹配（有实体但无明确意图模式）
+        # 9. 纯实体匹配（有实体但无明确意图模式）
         if entities.prescriptions and not entities.herbs:
             return IntentClassification(
                 primary_intent=IntentType.PRESCRIPTION,
@@ -294,6 +424,25 @@ class RuleBasedRouter:
 
         # 未匹配
         return None
+
+    def _is_pure_non_medical_query(self, query: str) -> bool:
+        """识别设备/技术等纯非医疗语境，同时保留真实人体症状。"""
+
+        if not any(term in query for term in self.NON_MEDICAL_CONTEXT_TERMS):
+            return False
+        if any(term in query for term in self.HUMAN_SPECIFIC_SYMPTOM_TERMS):
+            return False
+
+        non_medical_pattern = "|".join(
+            re.escape(term) for term in self.NON_MEDICAL_CONTEXT_TERMS
+        )
+        human_subject_with_symptom = re.search(
+            rf"(?:我|本人|患者|孩子|老人|家人)(?!的?(?:{non_medical_pattern}))"
+            r".{0,20}(?:发热|发烧|怕冷|怕热|乏力|疲倦|疼|痛|不舒服|不适|难受)",
+            query,
+            re.IGNORECASE,
+        )
+        return human_subject_with_symptom is None
 
     def add_prescription(self, name: str):
         """添加方剂名（支持动态扩展）"""

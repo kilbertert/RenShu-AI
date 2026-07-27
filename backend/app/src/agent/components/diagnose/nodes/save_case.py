@@ -24,6 +24,24 @@ async def save_case_node(state: dict[str, Any]) -> dict[str, Any]:
     任何字段缺失或异常均不影响上层状态返回。
     """
     try:
+        if state.get("error"):
+            logger.warning("save_case_node 跳过：诊断流程存在错误: %s", state.get("error"))
+            return {}
+
+        diagnosis_result = state.get("diagnosis_result")
+        if not isinstance(diagnosis_result, dict):
+            logger.debug("save_case_node 跳过：缺少结构化诊断结果")
+            return {}
+        syndrome = str(diagnosis_result.get("syndrome") or "").strip()
+        confidence = float(diagnosis_result.get("confidence") or 0)
+        if not syndrome or syndrome == "未明确" or confidence <= 0:
+            logger.warning(
+                "save_case_node 跳过：诊断未完成 syndrome=%s confidence=%s",
+                syndrome or "空",
+                confidence,
+            )
+            return {}
+
         user_id_raw = state.get("user_id")
         conversation_id_raw = state.get("conversation_id")
         if not user_id_raw or not conversation_id_raw:

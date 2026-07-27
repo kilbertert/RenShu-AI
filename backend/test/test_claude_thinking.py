@@ -19,8 +19,8 @@ except ImportError:
     sys.exit(1)
 
 # 直接使用提供的 API Key 和 Base URL
-CLAUDE_API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-CLAUDE_BASE_URL = "https://www.dmxapi.cn"  # 移除 /v1，LangChain 会自动添加
+CLAUDE_API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+CLAUDE_BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 print(f"Claude API Key: {CLAUDE_API_KEY[:10]}...")
 print(f"Claude Base URL: {CLAUDE_BASE_URL}")

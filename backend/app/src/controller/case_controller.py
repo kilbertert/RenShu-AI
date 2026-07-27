@@ -34,6 +34,9 @@ def _case_to_dict(case) -> dict:
         "syndrome_id": case.syndrome_id,
         "syndrome_name": case.syndrome_name,
         "syndrome_confidence": case.syndrome_confidence,
+        "diagnosis_payload": case.diagnosis_payload,
+        "tongue_analysis": case.tongue_analysis,
+        "report_analysis": getattr(case, "report_analysis", None),
         "created_at": case.created_at.isoformat() if case.created_at else None,
     }
 
@@ -43,6 +46,9 @@ def _detail_to_dict(detail: dict) -> dict:
     return {
         "case": _case_to_dict(case),
         "diagnosis_text": case.diagnosis_text,
+        "diagnosis_payload": case.diagnosis_payload,
+        "tongue_analysis": case.tongue_analysis,
+        "report_analysis": getattr(case, "report_analysis", None),
         "symptoms": [s.symptom_name for s in detail["symptoms"]],
         "syndromes": [
             {

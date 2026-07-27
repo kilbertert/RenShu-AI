@@ -18,6 +18,7 @@ from .account_model import (
 from .conversation_models import (
     Conversation, Message
 )
+from .attachment_models import ChatAttachment
 
 # 医疗相关模型
 from .medical_models import (
@@ -50,7 +51,7 @@ __all__ = [
     "Account", "Patient", "Doctor", "Admin", "AccountType", "AccountRefreshToken", "AccountActivity","UserState",
 
     # 对话相关
-    "Conversation", "Message",
+    "Conversation", "Message", "ChatAttachment",
 
     # 医疗相关
     "MedicalCase", "Symptom", "Syndrome", "MedicalRecord", "TongueAnalysis",

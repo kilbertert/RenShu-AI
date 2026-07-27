@@ -28,12 +28,14 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-TCM_ROOT = Path("D:/AI/project/RenShu-AI/TCM_Dataset")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+TCM_ROOT = get_tcm_dataset_root()
 REPORT_PATH = BACKEND_ROOT / "docs" / "tcm_dataset_exploration_report.md"
 MAPPING_PATH = BACKEND_ROOT / "docs" / "tcm_dataset_field_mapping.md"
 
 SKIP_DIRS = {"all_mol2"}
-SUPPORTED_SUFFIXES = (".csv", ".tsv", ".txt", ".xlsx")
+SUPPORTED_SUFFIXES = (".csv", ".tsv", ".txt", ".xlsx", ".obo", ".hpoa")
 
 # 文件 → 节点标签 的初稿（基于 README 推断，P0-3 人工审阅后纠正）
 FILE_TO_NODE_HINT = {
@@ -133,24 +135,25 @@ def read_text_info(path: Path) -> FileInfo:
         return info
 
     with open(path, encoding=enc, errors="replace") as f:
-        lines = [ln.rstrip("\n\r") for ln in f if ln.strip()]
+        first_line = next((ln.rstrip("\n\r") for ln in f if ln.strip()), None)
+        if first_line is None:
+            info.error = "空文件"
+            return info
+        second_line = next((ln.rstrip("\n\r") for ln in f if ln.strip()), None)
+        remaining = sum(1 for ln in f if ln.strip())
 
-    if not lines:
-        info.error = "空文件"
-        return info
-
-    header = lines[0]
+    header = first_line
     sep = "\t" if "\t" in header else ("," if "," in header else ("|" if "|" in header else None))
     if sep is None:
         info.fields = [header]
-        info.sample = lines[1].split() if len(lines) > 1 else []
-        info.row_count = max(0, len(lines) - 1)
+        info.sample = second_line.split() if second_line else []
+        info.row_count = (1 if second_line else 0) + remaining
         return info
 
     info.fields = [c.strip() for c in header.split(sep)]
-    info.row_count = max(0, len(lines) - 1)
-    if len(lines) > 1:
-        info.sample = [c.strip() for c in lines[1].split(sep)]
+    info.row_count = (1 if second_line else 0) + remaining
+    if second_line:
+        info.sample = [c.strip() for c in second_line.split(sep)]
     return info
 
 
@@ -184,7 +187,7 @@ def render_report(infos: list[FileInfo]) -> str:
     """渲染 markdown 探查报告。"""
     lines: list[str] = ["# TCM_Dataset 探查报告 (v2)\n"]
     lines.append("> 自动生成于 `scripts/explore_tcm_dataset.py`\n")
-    lines.append("> 数据源：`D:/AI/project/RenShu-AI/TCM_Dataset/`\n")
+    lines.append(f"> 数据源：`{TCM_ROOT}`\n")
     lines.append(
         f"> **统计**：{len(infos)} 个数据文件，"
         f"{sum(1 for i in infos if not i.error)} 个可读，"

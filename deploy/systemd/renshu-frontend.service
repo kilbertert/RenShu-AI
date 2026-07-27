@@ -1,0 +1,19 @@
+[Unit]
+Description=RenShu AI TCM frontend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/claude/Projects/RenShu-AI/frontend
+Environment=NODE_ENV=production
+ExecStart=/usr/local/bin/npm run preview -- --host 0.0.0.0 --port 3002
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/curl -fsS http://127.0.0.1:3002/ >/dev/null && exit 0; sleep 1; done; exit 1'
+Restart=on-failure
+RestartSec=5
+UMask=0027
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

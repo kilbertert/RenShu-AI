@@ -3,16 +3,25 @@ Neo4j 知识图谱探索脚本
 用于查看图谱结构、节点、关系、示例数据
 """
 
+import sys
+from pathlib import Path
+
 from neo4j import GraphDatabase
 
-# Neo4j 连接配置
-NEO4J_URI = "bolt://localhost:7687"  # bolt 协议端口
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "200102242519PyL"
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.src.common.config.setting_config import settings
 
 
 def explore_graph():
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    if not settings.NEO4J_PASSWORD:
+        raise RuntimeError("NEO4J_PASSWORD 未配置")
+    driver = GraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+    )
 
     with driver.session() as session:
         print("=" * 60)

@@ -42,7 +42,9 @@ def route_collection(state: DiagnoseOverallState) -> str:
         return "assess_complexity"
     elif next_action == "intent_switch":
         # 用户切换了意图，退出子图
-        return END
+        # 条件边映射使用的是业务键 "intent_switch"；直接返回 END 会被
+        # LangGraph 当作未知分支 "__end__"，继而触发诊断 LLM 兜底。
+        return "intent_switch"
     else:
         # 默认进入评估
         return "assess_complexity"
@@ -71,9 +73,9 @@ def route_by_complexity(state: DiagnoseOverallState) -> str:
     elif level == ComplexityLevel.MODERATE.value:
         return "moderate_diagnosis"
     elif level == ComplexityLevel.COMPLEX.value:
-        # TODO: 实现 DeepSearch Agent
-        # 暂时降级到中等辨证
-        return "moderate_diagnosis"
+        # 进入显式的复杂病例降级节点。该节点复用已去 mock 的 moderate RAG，
+        # 不启用仍含模拟检索的 DeepSearch 工具链。
+        return "complex_diagnosis"
     else:
         # 默认简单辨证
         return "simple_diagnosis"

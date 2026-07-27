@@ -1,8 +1,11 @@
-from typing import Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
+from datetime import datetime
 from uuid import UUID
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.src.schema.attachment_schema import ChatAttachmentRef
 
 
 # ============== 流式消息类型定义 ==============
@@ -70,10 +73,20 @@ class ChatRequest(BaseModel):
     """
     user_id: str=Field(..., description="用户ID")
     conversation_id: str=Field(..., description="会话ID")
-    query: str=Field(..., description="用户询问的问题")
+    query: str=Field(default="", description="用户询问的问题；有附件时允许为空")
+    attachments: list[ChatAttachmentRef] = Field(default_factory=list, max_length=4)
     model_configuration: ModelConfiguration=Field(..., description="模型配置")
     stream: bool=Field(False, description="是否流式返回")
     enable_thinking: bool=Field(False, description="是否启用思考过程展示（仅支持thinking的模型有效）")
+
+    @model_validator(mode="after")
+    def validate_content(self):
+        if not self.query.strip() and not self.attachments:
+            raise ValueError("文字和附件不能同时为空")
+        ids = [item.id for item in self.attachments]
+        if len(ids) != len(set(ids)):
+            raise ValueError("附件 ID 不得重复")
+        return self
 
 class PersonaAnalysisRequest(BaseModel):
     """
@@ -85,12 +98,80 @@ class PersonaAnalysisRequest(BaseModel):
     conversation_id: Optional[str] = Field(None, description="会话ID，用于更新会话画像")
     model_configuration: ModelConfiguration = Field(..., description="模型配置")
 
+
+class PersonaAnalysisPayload(BaseModel):
+    """会话画像的稳定结构化输出，字段名兼容现有前端。"""
+
+    age: str = ""
+    gender: str = ""
+    healthScore: int = Field(default=100, ge=0, le=100)
+    chiefComplaint: str = "待分析"
+    suspectedDiagnosis: str = "分析待定"
+    recommendedTreatment: str = "建议继续补充信息"
+
+    @field_validator(
+        "age",
+        "gender",
+        "chiefComplaint",
+        "suspectedDiagnosis",
+        "recommendedTreatment",
+        mode="before",
+    )
+    @classmethod
+    def normalize_nullable_text(cls, value):
+        return "" if value is None else str(value).strip()
+
+    @field_validator("healthScore", mode="before")
+    @classmethod
+    def normalize_health_score(cls, value):
+        if value in (None, ""):
+            return 100
+        try:
+            return max(0, min(100, int(float(value))))
+        except (TypeError, ValueError):
+            return 100
+
 class ChatResumeRequest(BaseModel):
     """
     恢复被 interrupt 暂停的聊天请求
     """
     conversation_id: str = Field(..., description="会话ID")
     thread_id: str = Field(..., description="LangGraph thread_id")
-    query: str = Field(..., description="用户追问回答")
+    query: str = Field(default="", description="用户追问回答；上传舌像时允许为空")
+    attachments: list[ChatAttachmentRef] = Field(default_factory=list, max_length=4)
     model_configuration: ModelConfiguration = Field(..., description="模型配置")
 
+    @model_validator(mode="after")
+    def validate_content(self):
+        if not self.query.strip() and not self.attachments:
+            raise ValueError("恢复问诊时文字和附件不能同时为空")
+        ids = [item.id for item in self.attachments]
+        if len(ids) != len(set(ids)):
+            raise ValueError("附件 ID 不得重复")
+        return self
+
+
+class AgentInterruptMetadata(BaseModel):
+    """可持久恢复的 LangGraph interrupt 元数据。"""
+
+    pending: bool = True
+    question: str = ""
+    action: str = ""
+    thread_id: str
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class AgentUserProfile(BaseModel):
+    """注入智能体的患者纵向健康画像。"""
+
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    constitution: Optional[str] = None
+    chronic_diseases: list[str] = Field(default_factory=list)
+    allergies: list[str] = Field(default_factory=list)
+    medical_history: list[str] = Field(default_factory=list)
+    family_history: list[str] = Field(default_factory=list)
+    taboo_items: list[str] = Field(default_factory=list)
+    most_common_syndrome: Optional[str] = None
+    total_cases: int = 0
+    session_persona: Dict[str, Any] = Field(default_factory=dict)

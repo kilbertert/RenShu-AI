@@ -83,92 +83,9 @@ async def classics_search(
         return {"citations": citations}
         
     except Exception as e:
-        logger.warning(f"古籍检索失败: {e}，使用模拟数据")
-        return {"citations": _get_mock_classics(keywords)}
-
-
-def _get_mock_classics(keywords: List[str]) -> List[Dict]:
-    """生成模拟的古籍数据"""
-    # 古籍条文模拟库
-    classics_db = [
-        # 伤寒论
-        {
-            "book": "伤寒论",
-            "chapter": "辨太阳病脉证并治",
-            "section": "第1条",
-            "text": "太阳之为病，脉浮，头项强痛而恶寒。",
-            "keywords": ["头痛", "太阳病", "恶寒"]
-        },
-        {
-            "book": "伤寒论",
-            "chapter": "辨少阳病脉证并治",
-            "section": "第96条",
-            "text": "伤寒五六日中风，往来寒热，胸胁苦满，嘿嘿不欲饮食，心烦喜呕。",
-            "keywords": ["胸闷", "少阳病", "不欲饮食"]
-        },
-        # 金匮要略
-        {
-            "book": "金匮要略",
-            "chapter": "血痹虚劳病脉证并治",
-            "text": "男子平人，脉虚弱细微者，善盗汗也。",
-            "keywords": ["虚劳", "盗汗"]
-        },
-        {
-            "book": "金匮要略",
-            "chapter": "肺痿肺痈咳嗽上气病脉证治",
-            "text": "咳而上气，喉中水鸡声，射干麻黄汤主之。",
-            "keywords": ["咳嗽", "喉咙"]
-        },
-        # 黄帝内经
-        {
-            "book": "黄帝内经·素问",
-            "chapter": "至真要大论",
-            "text": "诸风掉眩，皆属于肝。",
-            "keywords": ["头晕", "肝", "眩晕"]
-        },
-        {
-            "book": "黄帝内经·素问",
-            "chapter": "阴阳应象大论",
-            "text": "肝主怒，怒伤肝。",
-            "keywords": ["肝", "情志", "怒"]
-        },
-        {
-            "book": "黄帝内经·灵枢",
-            "chapter": "本神",
-            "text": "心藏神，神有余则笑不休，神不足则悲。",
-            "keywords": ["心", "失眠", "神"]
-        },
-        # 温病条辨
-        {
-            "book": "温病条辨",
-            "chapter": "上焦篇",
-            "text": "温病初起，发热无汗，或微恶风寒者，用辛凉轻剂。",
-            "keywords": ["发热", "温病"]
+        logger.warning("真实古籍检索不可用: %s", e)
+        return {
+            "citations": [],
+            "available": False,
+            "reason": "尚未建立可追溯古籍全文索引，未返回模拟条文。",
         }
-    ]
-    
-    # 根据关键词匹配
-    matched_citations = []
-    for entry in classics_db:
-        matched_keywords = [kw for kw in keywords if kw in entry.get("keywords", []) or kw in entry["text"]]
-        if matched_keywords:
-            matched_citations.append({
-                "book": entry["book"],
-                "chapter": entry["chapter"],
-                "section": entry.get("section", ""),
-                "text": entry["text"],
-                "keywords_matched": matched_keywords
-            })
-    
-    # 按匹配关键词数排序
-    matched_citations.sort(key=lambda x: -len(x["keywords_matched"]))
-    
-    return matched_citations[:5] if matched_citations else [
-        {
-            "book": "伤寒论",
-            "chapter": "概论",
-            "section": "",
-            "text": "未找到直接相关条文，请参考相关章节进行辨证。",
-            "keywords_matched": []
-        }
-    ]

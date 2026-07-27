@@ -1,15 +1,29 @@
 import axios, { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { convertKeysToSnake } from '../utils/camelToSnakeConverter';
 
-// 根据环境选择API基础URL
+const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+
+// 根据环境选择 API 基础 URL。
+// - Vite 开发服务器使用同源 /api，并由 vite.config.ts 代理到本机后端。
+// - 生产环境优先使用显式 VITE_API_BASE_URL；未配置时使用当前页面主机的 8094。
+// 这样从其他电脑访问前端时，不会把 localhost 错误解析成访问者自己的电脑。
 const getBaseURL = (): string => {
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
+  const configured = String(import.meta.env.VITE_API_BASE_URL || '').trim();
+  if (configured) {
+    if (configured.startsWith('/') && typeof window !== 'undefined') {
+      return trimTrailingSlash(`${window.location.origin}${configured}`);
+    }
+    return trimTrailingSlash(configured);
   }
-  if (import.meta.env.PROD) {
-    return 'https://your-production-server.com';
+  if (import.meta.env.DEV) {
+    return '';
   }
-  return 'http://localhost:8091';
+  if (typeof window !== 'undefined') {
+    const apiURL = new URL(window.location.origin);
+    apiURL.port = String(import.meta.env.VITE_API_PORT || '8094');
+    return apiURL.origin;
+  }
+  return 'http://127.0.0.1:8094';
 };
 
 // Token 刷新状态管理

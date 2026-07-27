@@ -64,8 +64,8 @@ except ImportError:
     ChatGroq = ChatOpenAI
 
 # 中转 API 配置（用于 OpenAI 等）
-API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-BASE_URL = "https://www.dmxapi.cn/v1"
+API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 # DeepSeek 官方 API 配置
 DEEPSEEK_API_KEY = settings.DEEPSEEK_API_KEY

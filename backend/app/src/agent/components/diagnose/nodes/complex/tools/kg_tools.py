@@ -50,50 +50,37 @@ async def kg_syndrome_search(
     """
     logger.info("知识图谱查询证型，症状: %s", symptoms)
 
-    graph = get_neo4j_graph()
-    if graph is None:
-        logger.warning("Neo4j 不可用，跳过证型查询，返回空结果")
-        return {"syndromes": []}
-
-    query = """
-    MATCH (s:Symptom)-[:INDICATES]->(syn:Syndrome)
-    WHERE s.name IN $symptoms
-    WITH syn, COLLECT(s.name) as matched_symptoms
-    WHERE SIZE(matched_symptoms) >= $min_match_count
-    RETURN syn.name as syndrome,
-           syn.description as description,
-           matched_symptoms,
-           SIZE(matched_symptoms) as match_count,
-           toFloat(SIZE(matched_symptoms)) / $symptom_count as confidence
-    ORDER BY confidence DESC
-    LIMIT 10
-    """
-
     try:
-        results = await graph.aquery(
-            query,
-            params={
-                "symptoms": symptoms,
-                "min_match_count": min_match_count,
-                "symptom_count": len(symptoms),
-            },
-        )
+        from app.src.agent.retrieval.graphrag import retrieve_diagnostic_graph
+
+        result = await retrieve_diagnostic_graph(symptoms, top_k=10)
     except Exception as exc:
-        logger.error("证型查询失败: %s", exc)
-        return {"syndromes": []}
+        logger.error("GraphRAG 证型查询失败: %s", exc)
+        return {"syndromes": [], "evidences": [], "available": False}
 
     syndromes = [
         {
-            "name": r["syndrome"],
-            "matched_symptoms": r["matched_symptoms"],
-            "confidence": r["confidence"],
-            "description": r["description"],
+            "id": candidate.syndrome_id,
+            "name": candidate.name,
+            "matched_symptoms": candidate.matched_keywords,
+            "confidence": candidate.score,
+            "match_count": candidate.match_count,
+            "diagnostic_axis": candidate.diagnostic_axis,
+            "constitutions": candidate.constitutions,
+            "related_tcm_diseases": candidate.related_tcm_diseases,
+            "evidence_ids": candidate.evidence_ids,
         }
-        for r in results
+        for candidate in result.candidates
+        if candidate.match_count >= min_match_count
     ]
 
     logger.info("找到 %d 个匹配证型", len(syndromes))
-    return {"syndromes": syndromes}
+    return {
+        "syndromes": syndromes,
+        "evidences": [item.model_dump() for item in result.evidences],
+        "available": result.graph_available,
+        "retrieval_mode": result.retrieval_mode,
+    }
 
 
 @tool

@@ -7,6 +7,7 @@
 3. 非流式 (invoke) - 使用父类实现
 """
 
+import os
 import sys
 import asyncio
 from pathlib import Path
@@ -17,8 +18,8 @@ sys.path.insert(0, str(backend_dir))
 
 from app.src.core.language_model.llm_provider import get_langchain_llm
 from langchain_core.messages import HumanMessage
-API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-BASE_URL = "https://www.dmxapi.cn/v1"
+API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 # 测试配置 - 请替换为你的 API Key
 # API_KEY = "your-moonshot-api-key"  # 替换为实际的 API Key
 # BASE_URL = "https://api.moonshot.cn/v1"
@@ -289,4 +290,3 @@ async def run_all_tests():
 
 if __name__ == "__main__":
     asyncio.run(run_all_tests())
-

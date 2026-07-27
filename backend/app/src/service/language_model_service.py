@@ -14,7 +14,12 @@ from copy import deepcopy
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from openai import AsyncOpenAI
-from app.src.response.exception.exceptions import ResourceNotFoundException, BusinessException
+from app.src.response.exception.exceptions import (
+    AuthenticationException,
+    AuthorizationException,
+    ResourceNotFoundException,
+    BusinessException,
+)
 from app.src.service.base_service import BaseService
 from app.src.common.decorators import require_login
 from app.src.common.context import get_current_user_id, get_user_roles
@@ -24,6 +29,21 @@ from app.src.model.model_config_models import (
     SystemModelProvider, SystemModelDefinition, UserProviderConfig, UserModelPreference
 )
 from app.src.schema.model_config_schema import ModelProviderCreate, ModelProviderUpdate, ModelConfigCreate, ModelConfigUpdate
+
+
+def _require_user_uuid(user_id: Optional[UUID | str]) -> UUID:
+    """服务层身份防线：写操作绝不接受匿名或非法用户 ID。"""
+    if user_id is None:
+        raise AuthenticationException("请先登录")
+    try:
+        return UUID(str(user_id))
+    except (TypeError, ValueError) as exc:
+        raise AuthenticationException("登录身份无效") from exc
+
+
+def _is_owner(owner_id: Optional[UUID], user_id: UUID) -> bool:
+    """仅非空且 UUID 相等时才判定为资源所有者。"""
+    return owner_id is not None and owner_id == user_id
 
 
 # ==================== 供应商服务 ====================
@@ -128,7 +148,7 @@ class ModelProviderService(BaseService[SystemModelProvider]):
     @require_login
     async def update_user_config(self, provider_id: UUID, data: dict) -> UserProviderConfig:
         """更新用户的供应商配置 (API Key, Base URL)"""
-        user_id = get_current_user_id()
+        user_id = _require_user_uuid(get_current_user_id())
         
         # 检查供应商是否存在
         provider = await self.get(provider_id)
@@ -225,6 +245,8 @@ class ModelProviderService(BaseService[SystemModelProvider]):
         - 管理员：创建系统级供应商 (owner_id = None)
         - 普通用户：创建私有供应商 (owner_id = user_id)
         """
+        user_id = _require_user_uuid(user_id)
+
         # 1. 检查是否存在同名供应商 (不区分大小写)
         from sqlalchemy import func
         target_name = data.name.lower()
@@ -279,15 +301,14 @@ class ModelProviderService(BaseService[SystemModelProvider]):
         2. 删除该供应商下的所有用户配置 (UserProviderConfig)
         3. 删除供应商本身 (SystemModelProvider)
         """
+        user_id = _require_user_uuid(user_id)
         provider = await self.get(provider_id)
         if not provider:
             raise ResourceNotFoundException("供应商不存在")
 
         # 权限检查
         if not is_admin:
-            if str(provider.owner_id) != str(user_id):
-                # 既不是管理员，也不是拥有者
-                from app.src.response.exception.exceptions import AuthorizationException
+            if not _is_owner(provider.owner_id, user_id):
                 raise AuthorizationException("无权删除此供应商")
         
         # 1. 删除关联的模型定义
@@ -314,6 +335,7 @@ class ModelProviderService(BaseService[SystemModelProvider]):
 
     async def update_provider_safe(self, provider_id: UUID, data: ModelProviderUpdate, user_id: UUID, is_admin: bool) -> Any:
         """安全更新供应商"""
+        user_id = _require_user_uuid(user_id)
         # 1. 获取供应商
         provider = await self.get(provider_id)
         if not provider:
@@ -321,7 +343,7 @@ class ModelProviderService(BaseService[SystemModelProvider]):
              raise ResourceNotFoundException("供应商不存在")
 
         # 2. 检查权限 (是否是拥有者)
-        is_owner = str(provider.owner_id) == str(user_id)
+        is_owner = _is_owner(provider.owner_id, user_id)
         
         # 准备用户配置更新数据
         config_update_data = data.model_dump(exclude_unset=True)
@@ -336,9 +358,10 @@ class ModelProviderService(BaseService[SystemModelProvider]):
             if "base_url" in update_dict:
                  provider.default_base_url = update_dict["base_url"]
                  sys_updated = True
-                 # 如果修改了默认地址，就不需要再设置覆盖地址了 (除非显式需要，但通常"编辑供应商"意为修改默认值)
-                 if "base_url" in config_update_data:
-                     del config_update_data["base_url"]
+                 # 管理员/私有供应商所有者也可能已有个人覆盖地址。只改默认值而
+                 # 保留旧 override 会造成“更新成功但实际调用仍走旧端点”。清除
+                 # 当前操作者自己的 override，使本次默认地址修改立即生效。
+                 config_update_data["base_url"] = ""
 
             # 更新其他元数据字段
             sys_fields = ["label", "description", "icon", "icon_background", "help_url", "supported_model_types", "position"]
@@ -351,15 +374,16 @@ class ModelProviderService(BaseService[SystemModelProvider]):
                 self.session.add(provider)
                 await self.session.flush()
             
-            # 同时更新用户配置 (主要是 API Key 和 Enabled 状态)
-            # 注意：base_url 已被从 config_update_data 中移除 (如果存在)，所以不会更新 base_url_override
+            # 同时更新当前操作者的 API Key、启用状态和覆盖地址。
             await self.update_user_config(provider_id, config_update_data)
             
             return provider # 返回 SystemModelProvider 对象
             
-        else:
-            # 普通用户修改系统供应商：只能修改用户配置 (UserProviderConfig)
-            return await self.update_user_config(provider_id, config_update_data)
+        if provider.owner_id is not None:
+            raise AuthorizationException("无权更新其他用户的私有供应商")
+
+        # 普通用户修改系统供应商：只能修改自己的 UserProviderConfig。
+        return await self.update_user_config(provider_id, config_update_data)
 
 
 
@@ -548,6 +572,8 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
             1. 在自己创建的供应商下创建模型 -> 设为私有 (owner_id=user_id)
             2. 在系统供应商下创建模型 -> 设为私有 (owner_id=user_id)
         """
+        user_id = _require_user_uuid(user_id)
+
         # 检查供应商是否存在
         provider = await self.provider_service.get(data.provider_id)
         if not provider:
@@ -561,8 +587,7 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
             
             # 权限检查：
             # 如果是私有供应商，必须是自己的
-            if str(provider.owner_id) and str(provider.owner_id) != str(user_id):
-                 from app.src.response.exception.exceptions import AuthorizationException
+            if provider.owner_id is not None and provider.owner_id != user_id:
                  raise AuthorizationException("无权在此私有供应商下创建模型")
             # 如果是系统供应商(provider.owner_id is None)，允许创建，但模型本身必须是私有的(已设置 owner_id=user_id)
 
@@ -582,6 +607,8 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
         - 管理员 OR 模型拥有者：更新系统定义
         - 普通用户 & 非拥有者：更新用户偏好 (UserModelPreference)
         """
+        user_id = _require_user_uuid(user_id)
+
         # 检查模型是否存在
         sys_model = await self.get(config_id)
         if not sys_model:
@@ -589,7 +616,7 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
 
         # 检查所有权
         # 模型本身的 owner_id 决定了归属
-        is_owner = str(sys_model.owner_id) == str(user_id)
+        is_owner = _is_owner(sys_model.owner_id, user_id)
     
         if is_admin or is_owner:
             # 管理员或拥有者：直接更新定义
@@ -602,9 +629,12 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
             
             # 调用 update 
             return await self.update(sys_model) 
-        else: 
-            # 普通用户修改系统模型(owner_id=None) 或 他人模型：更新偏好 
-            update_data = data.model_dump(exclude_unset=True) 
+        else:
+            if sys_model.owner_id is not None:
+                raise AuthorizationException("无权更新其他用户的私有模型")
+
+            # 普通用户修改系统模型(owner_id=None)：仅更新自己的偏好。
+            update_data = data.model_dump(exclude_unset=True)
             
             # 提取支持覆盖的字段 
             pref_data = {} 
@@ -627,15 +657,14 @@ class ModelConfigService(BaseService[SystemModelDefinition]):
         - 管理员：可以删除任何模型
         - 普通用户：只能删除自己创建的模型 (model.owner_id == user_id)
         """
+        user_id = _require_user_uuid(user_id)
         model = await self.get(config_id)
         if not model:
             raise ResourceNotFoundException("模型配置不存在")
 
         if not is_admin:
             # 权限检查：必须是模型的所有者
-            if str(model.owner_id) != str(user_id):
-                # 尝试删除系统模型或其他用户的模型
-                from app.src.response.exception.exceptions import AuthorizationException
+            if not _is_owner(model.owner_id, user_id):
                 raise AuthorizationException("无权删除此模型配置")
 
         await self.delete(model)
@@ -1007,5 +1036,3 @@ class LanguageModelService:
     async def init_default_data(self) -> None:
         """初始化默认数据"""
         await self.model_config_service.init_default_models()
-
-

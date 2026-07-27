@@ -19,6 +19,7 @@ from pathlib import Path
 
 # 在任何 app.* 导入前设置环境变量
 os.environ.setdefault("NEO4J_DB", "neo4j")
+os.environ.setdefault("USE_POSTGRES_CHECKPOINTER", "false")
 
 # 确保 backend 根目录在 sys.path（tests/ 在 backend/ 下，相对导入会用到）
 BACKEND_ROOT = Path(__file__).resolve().parent.parent

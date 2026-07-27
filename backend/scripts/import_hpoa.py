@@ -34,7 +34,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-EXTERNAL_ROOT = Path("D:/AI/project/RenShu-AI/TCM_Dataset/_external")
+from scripts.tcm_dataset_config import get_tcm_dataset_root
+
+EXTERNAL_ROOT = get_tcm_dataset_root() / "_external"
 HPO_DIR = EXTERNAL_ROOT / "HPO"
 
 BATCH_SIZE = 1000
@@ -166,28 +168,96 @@ def _write_hpoa_rels(g, batch: list[dict]) -> None:
     UNWIND $batch AS r
     MERGE (d:Disease {id: r.database_id})
       ON CREATE SET d.name = r.disease_name, d.source_db = split(r.database_id, ':')[0]
-    MERGE (m:MMSymptom {hpo_id: r.hpo_id})
+    MERGE (m:MMSymptom {source_db: 'HPO', hpo_id: r.hpo_id})
     MERGE (d)-[rel:DISEASE_HAS_MM_SYMPTOM]->(m)
       ON CREATE SET rel.frequency = r.frequency, rel.onset = r.onset, rel.aspect = r.aspect
+    SET rel.source_db = 'HPO'
     """, params={"batch": batch})
 
 
 def _write_gene_rels(g, batch: list[dict]) -> None:
     g.query("""
     UNWIND $batch AS r
-    MERGE (t:Target {ncbi_gene_id: r.ncbi_gene_id})
+    MERGE (t:Target {source_db: 'HPO', ncbi_gene_id: r.ncbi_gene_id})
       ON CREATE SET t.symbol = r.gene_symbol
-    MERGE (m:MMSymptom {hpo_id: r.hpo_id})
-    MERGE (t)-[:GENE_ASSOCIATED_WITH_PHENOTYPE]->(m)
+    MERGE (m:MMSymptom {source_db: 'HPO', hpo_id: r.hpo_id})
+    MERGE (t)-[gp:GENE_ASSOCIATED_WITH_PHENOTYPE]->(m)
+    SET gp.source_db = 'HPO'
     WITH t, r
     WHERE r.disease_id <> ''
     MERGE (d:Disease {id: r.disease_id})
-    MERGE (t)-[gd:GENE_ASSOCIATED_WITH_DISEASE]->(d)
+    MERGE (t)-[gd:TARGET_ASSOCIATED_WITH_DISEASE]->(d)
       ON CREATE SET gd.via_phenotype = r.hpo_id
+    SET gd.source_db = 'HPO'
+    WITH r, d
+    MATCH (bridged:Target {ncbi_gene_id: r.ncbi_gene_id})
+    WHERE bridged.source_db IN ['ITCM', 'SymMap']
+    MERGE (bridged)-[bridge:TARGET_ASSOCIATED_WITH_DISEASE]->(d)
+      ON CREATE SET bridge.via_phenotype = r.hpo_id
+    SET bridge.source_db = 'HPO', bridge.identity_bridge = 'ncbi_id'
     """, params={"batch": batch})
 
 
-def write_to_neo4j(hpo_terms: dict[str, HPOTerm], hpoa_path: Path, genes_path: Path) -> bool:
+def repair_legacy_hpo_import(g) -> None:
+    """修复旧版按 ``hpo_id`` 跨来源合并造成的来源覆盖与错误边。
+
+    该操作只在显式传入 ``--repair-legacy`` 时执行。节点保留，HPO 关系会在
+    随后的正常导入阶段依据官方源文件重新建立。
+    """
+    restored = g.query("""
+    MATCH (m:MMSymptom {source_db: 'HPO'})
+    WHERE m.symmap_id IS NOT NULL
+    SET m.source_db = 'SymMap'
+    RETURN count(m) AS count
+    """)
+    disease_rels = g.query("""
+    MATCH (d:Disease)-[r:DISEASE_HAS_MM_SYMPTOM]->(:MMSymptom)
+    WHERE d.source_db IN ['OMIM', 'ORPHA', 'DECIPHER']
+    DELETE r
+    RETURN count(r) AS count
+    """)
+    phenotype_rels = g.query("""
+    MATCH (:Target {source_db: 'HPO'})-[r:GENE_ASSOCIATED_WITH_PHENOTYPE]->()
+    DELETE r
+    RETURN count(r) AS count
+    """)
+    disease_target_rels = g.query("""
+    MATCH (:Target)-[r:TARGET_ASSOCIATED_WITH_DISEASE]->()
+    WHERE r.source_db = 'HPO'
+    DELETE r
+    RETURN count(r) AS count
+    """)
+    print(
+        "[REPAIR] legacy HPO import: "
+        f"restored_symmap={restored[0]['count'] if restored else 0}, "
+        f"deleted_disease_symptom={disease_rels[0]['count'] if disease_rels else 0}, "
+        f"deleted_gene_phenotype={phenotype_rels[0]['count'] if phenotype_rels else 0}, "
+        f"deleted_target_disease={disease_target_rels[0]['count'] if disease_target_rels else 0}"
+    )
+
+
+def prepare_target_identity_bridges(g) -> int:
+    """为可对齐的 ITCM/SymMap Target 补统一 NCBI Gene ID。"""
+    rows = g.query("""
+    MATCH (t:Target)
+    WHERE t.source_db IN ['ITCM', 'SymMap']
+      AND t.ncbi_id IS NOT NULL
+      AND toString(t.ncbi_id) <> ''
+    SET t.ncbi_gene_id = 'NCBI:' + toString(t.ncbi_id)
+    RETURN count(t) AS count
+    """)
+    count = int(rows[0]["count"]) if rows else 0
+    print(f"[BRIDGE] normalized Target.ncbi_gene_id={count}")
+    return count
+
+
+def write_to_neo4j(
+    hpo_terms: dict[str, HPOTerm],
+    hpoa_path: Path,
+    genes_path: Path,
+    *,
+    repair_legacy: bool = False,
+) -> bool:
     try:
         from app.src.core.graph_db import get_neo4j_graph
     except ImportError as exc:
@@ -198,6 +268,10 @@ def write_to_neo4j(hpo_terms: dict[str, HPOTerm], hpoa_path: Path, genes_path: P
     if g is None:
         print("[FAIL] Neo4j 未连接，请启动 Neo4j 后重试。可用 --dry-run 仅统计。")
         return False
+
+    if repair_legacy:
+        repair_legacy_hpo_import(g)
+    prepare_target_identity_bridges(g)
 
     t0 = time.monotonic()
     print("[WRITE] MMSymptom 节点 (from hp.obo) ...")
@@ -215,16 +289,18 @@ def write_to_neo4j(hpo_terms: dict[str, HPOTerm], hpoa_path: Path, genes_path: P
         if len(batch) >= BATCH_SIZE:
             g.query("""
             UNWIND $batch AS t
-            MERGE (m:MMSymptom {hpo_id: t.hpo_id})
-            SET m.name = t.name, m.definition = t.definition, m.synonyms = t.synonyms
+            MERGE (m:MMSymptom {source_db: 'HPO', hpo_id: t.hpo_id})
+            SET m.name = t.name, m.definition = t.definition,
+                m.synonyms = t.synonyms
             """, params={"batch": batch})
             written += len(batch)
             batch = []
     if batch:
         g.query("""
         UNWIND $batch AS t
-        MERGE (m:MMSymptom {hpo_id: t.hpo_id})
-        SET m.name = t.name, m.definition = t.definition, m.synonyms = t.synonyms
+        MERGE (m:MMSymptom {source_db: 'HPO', hpo_id: t.hpo_id})
+        SET m.name = t.name, m.definition = t.definition,
+            m.synonyms = t.synonyms
         """, params={"batch": batch})
         written += len(batch)
     print(f"  -> wrote/updated {written} MMSymptom in {time.monotonic() - t0:.1f}s")
@@ -273,7 +349,7 @@ def write_to_neo4j(hpo_terms: dict[str, HPOTerm], hpoa_path: Path, genes_path: P
     return True
 
 
-def main(dry_run: bool = False) -> int:
+def main(dry_run: bool = False, repair_legacy: bool = False) -> int:
     hp_obo = HPO_DIR / "hp.obo"
     hpoa = HPO_DIR / "phenotype.hpoa"
     genes = HPO_DIR / "genes_to_phenotype.txt"
@@ -302,12 +378,22 @@ def main(dry_run: bool = False) -> int:
         return 0
 
     print(f"\n[WRITE] -> Neo4j ...")
-    ok = write_to_neo4j(hpo_terms, hpoa, genes)
+    ok = write_to_neo4j(
+        hpo_terms,
+        hpoa,
+        genes,
+        repair_legacy=repair_legacy,
+    )
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="仅解析+统计，不写入 Neo4j")
+    parser.add_argument(
+        "--repair-legacy",
+        action="store_true",
+        help="重建旧版 HPO 导入产生的跨来源症状边与来源标记",
+    )
     args = parser.parse_args()
-    raise SystemExit(main(dry_run=args.dry_run))
+    raise SystemExit(main(dry_run=args.dry_run, repair_legacy=args.repair_legacy))

@@ -35,6 +35,66 @@ interface PublicPortalProps {
   onLogout: () => void;
 }
 
+interface UploadedAttachmentBatch {
+  refs: Array<{ id: string }>;
+  messageAttachments: NonNullable<ChatMessage['attachments']>;
+}
+
+function attachmentPlaceholder(attachments: Attachment[]): string {
+  const hasTongue = attachments.some(item => item.kind === 'tongue_image');
+  const hasReport = attachments.some(item => item.kind === 'medical_report');
+  if (hasTongue && hasReport) return '（上传舌像和医疗报告）';
+  if (hasReport) return '（上传医疗报告）';
+  if (hasTongue) return '（上传舌像）';
+  return '（上传附件）';
+}
+
+function attachmentSessionTitle(attachments: Attachment[]): string {
+  return attachments.some(item => item.kind === 'medical_report') ? '医疗报告解读' : '舌像问诊';
+}
+
+function uploadedAttachmentPlaceholder(
+  attachments: NonNullable<ChatMessage['attachments']>
+): string {
+  const hasTongue = attachments.some(item => item.kind === 'tongue_image');
+  const hasReport = attachments.some(item => item.kind === 'medical_report');
+  if (hasTongue && hasReport) return '（上传舌像和医疗报告）';
+  if (hasReport) return '（上传医疗报告）';
+  if (hasTongue) return '（上传舌像）';
+  return '（上传附件）';
+}
+
+async function uploadPendingAttachments(
+  conversationId: string,
+  attachments: Attachment[]
+): Promise<UploadedAttachmentBatch> {
+  const records = await Promise.all(
+    attachments.map(async attachment => {
+      const response = await chatApi.uploadAttachment(
+        conversationId,
+        attachment.file,
+        attachment.kind
+      );
+      if (!response.success || !response.data) {
+        throw new Error('附件上传失败');
+      }
+      return response.data;
+    })
+  );
+  return {
+    refs: records.map(record => ({ id: record.id })),
+    messageAttachments: records.map(record => ({
+      id: record.id,
+      type: record.mime_type === 'application/pdf' ? 'file' as const : 'image' as const,
+      url: record.download_url,
+      name: record.original_filename,
+      kind: record.kind,
+      mime_type: record.mime_type,
+      size_bytes: record.size_bytes,
+    })),
+  };
+}
+
 const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
   const navigate = useNavigate();
 
@@ -147,7 +207,8 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
               name: m.label || m.model_name,
               description: m.description || '',
               supportsThinking: m.features?.includes('thinking') || false,
-              supportsVision: m.features?.includes('vision') || false,
+              supportsVision:
+                m.model_type === 'vision' || m.features?.includes('image_input') || false,
               supportsToolCall: m.features?.includes('tool_call') || false,
               provider: p.name as any,
               contextWindow: m.context_window ? `${Math.round(m.context_window / 1000)}K` : undefined,
@@ -267,6 +328,8 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
             title: c.title || '无标题对话',
             messages: [],
             persona: c.session_metadata,
+            threadId: c.agent_thread_id || undefined,
+            isInterrupted: Boolean(c.agent_interrupt?.pending),
             lastModified: (() => {
               const date = c.updated_at ? new Date(c.updated_at) : new Date();
               return isNaN(date.getTime()) ? new Date() : date;
@@ -328,6 +391,36 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
                 return meta.attachments || [];
               } catch (e) {
                 return [];
+              }
+            })(),
+            diagnosisResult: (() => {
+              if (!m.message_metadata) return undefined;
+              try {
+                const meta =
+                  typeof m.message_metadata === 'string' ? JSON.parse(m.message_metadata) : m.message_metadata;
+                return meta.diagnosis_result;
+              } catch (e) {
+                return undefined;
+              }
+            })(),
+            tongueAnalysis: (() => {
+              if (!m.message_metadata) return undefined;
+              try {
+                const meta =
+                  typeof m.message_metadata === 'string' ? JSON.parse(m.message_metadata) : m.message_metadata;
+                return meta.tongue_analysis;
+              } catch (e) {
+                return undefined;
+              }
+            })(),
+            reportAnalysis: (() => {
+              if (!m.message_metadata) return undefined;
+              try {
+                const meta =
+                  typeof m.message_metadata === 'string' ? JSON.parse(m.message_metadata) : m.message_metadata;
+                return meta.report_analysis;
+              } catch (e) {
+                return undefined;
               }
             })(),
           }));
@@ -518,6 +611,36 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
                   return [];
                 }
               })(),
+              diagnosisResult: (() => {
+                if (!m.message_metadata) return undefined;
+                try {
+                  const meta =
+                    typeof m.message_metadata === 'string' ? JSON.parse(m.message_metadata) : m.message_metadata;
+                  return meta.diagnosis_result;
+                } catch (e) {
+                  return undefined;
+                }
+              })(),
+              tongueAnalysis: (() => {
+                if (!m.message_metadata) return undefined;
+                try {
+                  const meta =
+                    typeof m.message_metadata === 'string' ? JSON.parse(m.message_metadata) : m.message_metadata;
+                  return meta.tongue_analysis;
+                } catch (e) {
+                  return undefined;
+                }
+              })(),
+              reportAnalysis: (() => {
+                if (!m.message_metadata) return undefined;
+                try {
+                  const meta =
+                    typeof m.message_metadata === 'string' ? JSON.parse(m.message_metadata) : m.message_metadata;
+                  return meta.report_analysis;
+                } catch (e) {
+                  return undefined;
+                }
+              })(),
             }));
             setSessions(prev => prev.map(s => (s.id === activeSessionId ? { ...s, messages } : s)));
           }
@@ -599,76 +722,106 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
 
   // 实际发送 (内部使用,负责 SSE + persona 分析)
   const handleSendMessage = useCallback(
-    async (overrideText?: string) => {
+    async (overrideText?: string, pendingAttachments: Attachment[] = []): Promise<boolean> => {
       console.log('🚀 [handleSendMessage] 被调用');
       if (globalSendingLockRef.current) {
         console.log('⚠️ [全局锁] 有请求正在进行中,忽略重复提交');
-        return;
+        return false;
       }
       const now = Date.now();
       if (now - lastSendTimeRef.current < 2000) {
         console.log('⚠️ [时间戳] 请求间隔过短,忽略重复提交');
-        return;
+        return false;
       }
       const currentSessionKey = activeSessionId || 'new';
       if (isSendingRef.current[currentSessionKey]) {
         console.log('⚠️ [会话锁] 该会话请求已在进行中,忽略重复提交');
-        return;
+        return false;
       }
       globalSendingLockRef.current = true;
       lastSendTimeRef.current = now;
       isSendingRef.current[currentSessionKey] = true;
 
-      // 中断恢复
-      const currentSess = sessions.find(s => s.id === activeSessionId);
-      if (currentSess?.isInterrupted && currentSess?.threadId) {
-        const textForResume = overrideText ?? '';
-        if (!textForResume.trim()) {
-          globalSendingLockRef.current = false;
-          isSendingRef.current[currentSessionKey] = false;
-          return;
-        }
-        await handleResumeMessage(textForResume, currentSess);
-        return;
+      const releaseSendLock = () => {
+        globalSendingLockRef.current = false;
+        isSendingRef.current[currentSessionKey] = false;
+      };
+      const textToSend = overrideText ?? '';
+      if (!textToSend.trim() && pendingAttachments.length === 0) {
+        releaseSendLock();
+        return false;
       }
 
       if (!selectedModel.id) {
-        globalSendingLockRef.current = false;
-        isSendingRef.current[currentSessionKey] = false;
+        releaseSendLock();
         setAlertConfig({
           title: '未选择有效模型',
           description: '当前未选择有效的模型配置。请先切换到有可用模型的提供商,或在模型管理中启用模型。',
         });
         setShowAlertModal(true);
-        return;
+        return false;
       }
 
-      const textToSend = overrideText ?? '';
-      if (!textToSend.trim()) {
-        globalSendingLockRef.current = false;
-        isSendingRef.current[currentSessionKey] = false;
-        return;
+      if (pendingAttachments.length > 0 && !selectedModel.supportsVision) {
+        releaseSendLock();
+        setAlertConfig({
+          title: '当前模型不支持舌像',
+          description: '请切换到声明了图片输入能力的模型后再上传舌像。',
+        });
+        setShowAlertModal(true);
+        return false;
       }
 
       // 检查 API key
       const providerConfig = providerConfigs[selectedModel.provider];
       const isGoogle = selectedModel.provider === 'google';
       if (!isGoogle && !providerConfig?.apiKey) {
-        globalSendingLockRef.current = false;
-        isSendingRef.current[currentSessionKey] = false;
+        releaseSendLock();
         setIsQuickConfigOpen(true);
-        return;
+        return false;
+      }
+
+      // 中断恢复：附件先进入当前会话，再以附件 ID 恢复暂停中的诊断子图。
+      const currentSess = sessions.find(s => s.id === activeSessionId);
+      if (currentSess?.isInterrupted && currentSess?.threadId) {
+        try {
+          const uploaded = await uploadPendingAttachments(currentSess.id, pendingAttachments);
+          await handleResumeMessage(textToSend, currentSess, uploaded);
+          return true;
+        } catch (error) {
+          releaseSendLock();
+          setAlertConfig({
+            title: '附件上传失败',
+            description: error instanceof Error ? error.message : '附件上传失败，请稍后重试。',
+          });
+          setShowAlertModal(true);
+          return false;
+        }
       }
 
       let targetSessionId = activeSessionId;
       let isNewSession = false;
 
-      if (!targetSessionId) {
-        targetSessionId = uuidv4();
+      if (!targetSessionId) targetSessionId = uuidv4();
+
+      let uploaded: UploadedAttachmentBatch = { refs: [], messageAttachments: [] };
+      try {
+        uploaded = await uploadPendingAttachments(targetSessionId, pendingAttachments);
+      } catch (error) {
+        releaseSendLock();
+        setAlertConfig({
+          title: '附件上传失败',
+          description: error instanceof Error ? error.message : '附件上传失败，请稍后重试。',
+        });
+        setShowAlertModal(true);
+        return false;
+      }
+
+      if (!activeSessionId) {
         isNewSession = true;
         const newSession: ChatSession = {
           id: targetSessionId,
-          title: textToSend.slice(0, 20) || '新的对话',
+          title: textToSend.slice(0, 20) || attachmentSessionTitle(pendingAttachments),
           messages: [],
           lastModified: new Date(),
           persona: defaultPersona,
@@ -680,8 +833,9 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
       const userMsg: ChatMessage = {
         id: Date.now().toString(),
         role: 'user',
-        text: textToSend,
+        text: textToSend || attachmentPlaceholder(pendingAttachments),
         timestamp: new Date(),
+        attachments: uploaded.messageAttachments,
       };
 
       // Optimistic UI update
@@ -693,7 +847,8 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
       }
 
       if (isNewSession || (currentSession?.messages.length === 0)) {
-        const newTitle = textToSend.slice(0, 20) + (textToSend.length > 20 ? '...' : '');
+        const titleText = textToSend || attachmentSessionTitle(pendingAttachments);
+        const newTitle = titleText.slice(0, 20) + (titleText.length > 20 ? '...' : '');
         setSessions(prev =>
           prev.map(s => (s.id === targetSessionId ? { ...s, title: newTitle } : s))
         );
@@ -707,7 +862,7 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
             role: m.role === 'model' ? 'assistant' : 'user',
             content: m.text,
           }));
-      history.push({ role: 'user', content: textToSend });
+      history.push({ role: 'user', content: textToSend || attachmentPlaceholder(pendingAttachments) });
 
       // === 流式生成 ===
       (async () => {
@@ -748,6 +903,7 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
               },
               stream: true,
               enable_thinking: enableThinking,
+              attachments: uploaded.refs,
             },
             (data: any) => {
               if (data.type === 'thread_init' && data.thread_id) {
@@ -805,6 +961,45 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
                   }
                   return prev;
                 });
+                return;
+              }
+              if (data.type === 'diagnosis_result' && data.data) {
+                setSessions(prev => prev.map(s =>
+                  s.id === targetSessionId
+                    ? {
+                        ...s,
+                        messages: s.messages.map(m =>
+                          m.id === modelMsgId ? { ...m, diagnosisResult: data.data } : m
+                        ),
+                      }
+                    : s
+                ));
+                return;
+              }
+              if (data.type === 'tongue_analysis' && data.data) {
+                setSessions(prev => prev.map(s =>
+                  s.id === targetSessionId
+                    ? {
+                        ...s,
+                        messages: s.messages.map(m =>
+                          m.id === modelMsgId ? { ...m, tongueAnalysis: data.data } : m
+                        ),
+                      }
+                    : s
+                ));
+                return;
+              }
+              if (data.type === 'report_analysis' && data.data) {
+                setSessions(prev => prev.map(s =>
+                  s.id === targetSessionId
+                    ? {
+                        ...s,
+                        messages: s.messages.map(m =>
+                          m.id === modelMsgId ? { ...m, reportAnalysis: data.data } : m
+                        ),
+                      }
+                    : s
+                ));
                 return;
               }
               if (data.type === 'content') {
@@ -885,7 +1080,7 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
       })();
 
       // === 用户画像分析 (并行) ===
-      (async () => {
+      if (textToSend.trim()) (async () => {
         try {
           const res = await chatApi.analyzePersona({
             user_id: user.id,
@@ -916,6 +1111,7 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
           console.error('Persona analysis failed in parallel', e);
         }
       })();
+      return true;
     },
     [
       activeSessionId,
@@ -937,13 +1133,18 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
 
   // handleResumeMessage 单独定义,被 handleSendMessage 调用
   const handleResumeMessage = useCallback(
-    async (textToSend: string, session: ChatSession) => {
+    async (
+      textToSend: string,
+      session: ChatSession,
+      uploaded: UploadedAttachmentBatch = { refs: [], messageAttachments: [] }
+    ) => {
       const targetSessionId = session.id;
       const userMsg: ChatMessage = {
         id: Date.now().toString(),
         role: 'user',
-        text: textToSend,
+        text: textToSend || uploadedAttachmentPlaceholder(uploaded.messageAttachments),
         timestamp: new Date(),
+        attachments: uploaded.messageAttachments,
       };
       setSessions(prev =>
         prev.map(x =>
@@ -978,6 +1179,7 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
             conversation_id: targetSessionId,
             thread_id: session.threadId!,
             query: textToSend,
+            attachments: uploaded.refs,
             model_configuration: {
               provider_id: selectedModel.providerId || '',
               model_id: selectedModel.realId || '',
@@ -1039,6 +1241,45 @@ const PublicPortal: React.FC<PublicPortalProps> = ({ user, onLogout }) => {
                 }
                 return prev;
               });
+              return;
+            }
+            if (data.type === 'diagnosis_result' && data.data) {
+              setSessions(prev => prev.map(s =>
+                s.id === targetSessionId
+                  ? {
+                      ...s,
+                      messages: s.messages.map(m =>
+                        m.id === modelMsgId ? { ...m, diagnosisResult: data.data } : m
+                      ),
+                    }
+                  : s
+              ));
+              return;
+            }
+            if (data.type === 'tongue_analysis' && data.data) {
+              setSessions(prev => prev.map(s =>
+                s.id === targetSessionId
+                  ? {
+                      ...s,
+                      messages: s.messages.map(m =>
+                        m.id === modelMsgId ? { ...m, tongueAnalysis: data.data } : m
+                      ),
+                    }
+                  : s
+              ));
+              return;
+            }
+            if (data.type === 'report_analysis' && data.data) {
+              setSessions(prev => prev.map(s =>
+                s.id === targetSessionId
+                  ? {
+                      ...s,
+                      messages: s.messages.map(m =>
+                        m.id === modelMsgId ? { ...m, reportAnalysis: data.data } : m
+                      ),
+                    }
+                  : s
+              ));
               return;
             }
             if (data.type === 'content') {

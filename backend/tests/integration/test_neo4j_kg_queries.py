@@ -18,6 +18,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 
@@ -35,17 +37,23 @@ class TestDatabasePopulation:
         assert n > 20000, f"ITCM Formula 节点过少: {n}"
 
     def test_itcm_herb_node_count(self, neo4j_graph):
-        rows = neo4j_graph.query("MATCH (h:Herb_ITCM) RETURN count(h) AS n")
+        rows = neo4j_graph.query(
+            "MATCH (h:Herb {source_db: 'ITCM'}) RETURN count(h) AS n"
+        )
         n = rows[0]["n"]
         assert n > 1000, f"ITCM Herb 节点过少: {n}"
 
     def test_itcm_ingredient_node_count(self, neo4j_graph):
-        rows = neo4j_graph.query("MATCH (i:Ingredient_ITCM) RETURN count(i) AS n")
+        rows = neo4j_graph.query(
+            "MATCH (i:Ingredient {source_db: 'ITCM'}) RETURN count(i) AS n"
+        )
         n = rows[0]["n"]
         assert n > 10000, f"ITCM Ingredient 节点过少: {n}"
 
     def test_itcm_target_node_count(self, neo4j_graph):
-        rows = neo4j_graph.query("MATCH (t:Target_ITCM) RETURN count(t) AS n")
+        rows = neo4j_graph.query(
+            "MATCH (t:Target {source_db: 'ITCM'}) RETURN count(t) AS n"
+        )
         n = rows[0]["n"]
         assert n > 1000, f"ITCM Target 节点过少: {n}"
 
@@ -76,26 +84,53 @@ class TestDatabasePopulation:
         n = rows[0]["n"]
         assert n > 10000, f"hpo_id 桥接节点数过少: {n}"
 
+    def test_med_tcm_diagnostic_axis_node_counts(self, neo4j_graph):
+        """授权 med tenant 10001 应完整导入且不混入重复租户。"""
+        rows = neo4j_graph.query("""
+        MATCH (n {source_db: 'med_tcm'})
+        RETURN count(n) AS total,
+               count(CASE WHEN n:Syndrome THEN 1 END) AS syndromes,
+               count(CASE WHEN n:TCMSymptom THEN 1 END) AS symptoms,
+               count(CASE WHEN n:TCMDisease THEN 1 END) AS diseases,
+               count(CASE WHEN n:Constitution THEN 1 END) AS constitutions,
+               count(CASE WHEN n:TCMDiseaseCategory THEN 1 END) AS categories
+        """)
+        row = rows[0]
+        assert row == {
+            "total": 3777,
+            "syndromes": 402,
+            "symptoms": 3242,
+            "diseases": 108,
+            "constitutions": 8,
+            "categories": 17,
+        }
+
 
 # ============ 关系 sanity check ============
 
 class TestDatabaseRelationships:
 
-    def test_contains_total_count(self, neo4j_graph):
-        """ITCM 关系灌库中 P2-6 阶段，Herb→Ingredient CONTAINS 由 import_itcm_rels 写入。
-        注意：Formula→Herb 关系也用 CONTAINS 类型，需要等 P2-6 完成才能 >= 1,259 + 68,965。
-        当前 P2-6 进行中，断言放宽到 > 100 即可。
-        """
-        rows = neo4j_graph.query("MATCH ()-[r:CONTAINS]->() RETURN count(r) AS n")
+    def test_formula_contains_herb_count(self, neo4j_graph):
+        rows = neo4j_graph.query(
+            "MATCH ()-[r:FORMULA_CONTAINS_HERB]->() RETURN count(r) AS n"
+        )
         n = rows[0]["n"]
         assert n > 100, f"CONTAINS 关系过少: {n}"
+
+    def test_herb_contains_ingredient_count(self, neo4j_graph):
+        rows = neo4j_graph.query(
+            "MATCH ()-[r:HERB_CONTAINS_INGREDIENT]->() RETURN count(r) AS n"
+        )
+        assert rows[0]["n"] > 100
 
     def test_ingredient_targets_count(self, neo4j_graph):
         """TARGETS 关系由 import_itcm_rels P2-6 写入；P2-6 完成后应有 ~67k。
         当前 P2-6 进行中，关系类型可能尚未存在。
         """
         try:
-            rows = neo4j_graph.query("MATCH ()-[r:TARGETS]->() RETURN count(r) AS n")
+            rows = neo4j_graph.query(
+                "MATCH ()-[r:INGREDIENT_TARGETS]->() RETURN count(r) AS n"
+            )
             n = rows[0]["n"]
         except Exception:
             n = 0
@@ -109,6 +144,84 @@ class TestDatabaseRelationships:
         )
         n = rows[0]["n"]
         assert n > 1000, f"DISEASE_HAS_MM_SYMPTOM 关系过少: {n}"
+
+    def test_target_disease_ncbi_bridge_count(self, neo4j_graph):
+        """ITCM/SymMap Target 必须通过官方 NCBI Gene ID 接到 HPO 疾病。"""
+        rows = neo4j_graph.query("""
+        MATCH (:Target)-[r:TARGET_ASSOCIATED_WITH_DISEASE]->(:Disease)
+        WHERE r.identity_bridge = 'ncbi_id'
+        RETURN count(r) AS n
+        """)
+        assert rows[0]["n"] > 10000
+
+    def test_network_pharmacology_chain_is_connected(self, neo4j_graph):
+        """关系类型存在之外，方剂到现代医学表型的 5 跳链必须真实可达。"""
+        rows = neo4j_graph.query("""
+        MATCH p=(:Formula)-[:FORMULA_CONTAINS_HERB]->(:Herb)
+          -[:HERB_CONTAINS_INGREDIENT]->(:Ingredient)
+          -[:INGREDIENT_TARGETS]->(:Target)
+          -[:TARGET_ASSOCIATED_WITH_DISEASE]->(:Disease)
+          -[:DISEASE_HAS_MM_SYMPTOM]->(:MMSymptom)
+        RETURN length(p) AS hops
+        LIMIT 1
+        """)
+        assert rows and rows[0]["hops"] == 5
+
+    def test_med_syndrome_symptom_relationship_count(self, neo4j_graph):
+        rows = neo4j_graph.query("""
+        MATCH (:Syndrome {source_db: 'med_tcm'})
+              -[r:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM]->
+              (:TCMSymptom {source_db: 'med_tcm'})
+        RETURN count(r) AS n
+        """)
+        assert rows[0]["n"] == 5273
+
+    def test_med_tongue_pulse_constitution_axis_is_connected(self, neo4j_graph):
+        rows = neo4j_graph.query("""
+        MATCH (sy:Syndrome {source_db: 'med_tcm'})
+              -[:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM]->
+              (:TCMSymptom:TongueSymptom {source_db: 'med_tcm'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM]->
+              (:TCMSymptom:PulseSymptom {source_db: 'med_tcm'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_CONSTITUTION]->
+              (:Constitution {source_db: 'med_tcm'})
+        RETURN sy.name_zh AS syndrome
+        LIMIT 1
+        """)
+        assert rows and rows[0]["syndrome"]
+
+    def test_heart_spleen_deficiency_full_diagnostic_axis(self, neo4j_graph):
+        """固定临床样例必须具备主症、兼症、舌、脉和体质全轴证据。"""
+        rows = neo4j_graph.query("""
+        MATCH (sy:Syndrome {source_db: 'med_tcm', canonical_name: '心脾两虚'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM {symptom_role: 'main'}]
+              ->(main:TCMSymptom {source_db: 'med_tcm'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM {symptom_role: 'supplement'}]
+              ->(supplement:TCMSymptom {source_db: 'med_tcm'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM {symptom_role: 'tongue'}]
+              ->(tongue:TCMSymptom {source_db: 'med_tcm'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_TCM_SYMPTOM {symptom_role: 'pulse'}]
+              ->(pulse:TCMSymptom {source_db: 'med_tcm'})
+        MATCH (sy)-[:SYNDROME_ASSOCIATED_WITH_CONSTITUTION]
+              ->(constitution:Constitution {source_db: 'med_tcm'})
+        RETURN sy.name_zh AS syndrome,
+               main.name_zh AS main_symptom,
+               supplement.name_zh AS supplement_symptom,
+               tongue.name_zh AS tongue,
+               pulse.name_zh AS pulse,
+               constitution.name_zh AS constitution
+        LIMIT 1
+        """)
+        assert rows
+        row = rows[0]
+        assert row["syndrome"] in {"心脾两虚", "心脾两虚证"}
+        assert all(row[field] for field in (
+            "main_symptom",
+            "supplement_symptom",
+            "tongue",
+            "pulse",
+            "constitution",
+        ))
 
 
 # ============ 端到端 Cypher 验证：可重现 _query_xxx 的核心 cypher ============
@@ -145,6 +258,33 @@ class TestQueryRelatedPrescriptionsCypher:
 
 
 class TestQuerySimilarSyndromesCypher:
+
+    def test_active_moderate_query_prefers_med_relationships(self):
+        from app.src.agent.components.diagnose.models import CollectedDiagnoseInfo
+        from app.src.agent.components.diagnose.nodes.moderate_diagnosis.moderate_diagnosis import (
+            _query_similar_syndromes,
+        )
+
+        info = CollectedDiagnoseInfo(
+            chief_complaint="多梦易醒，心悸健忘，食少便溏",
+            sleep="失眠多梦",
+            tongue={"tongue_color": "淡", "coating_quality": "薄"},
+        )
+
+        results = asyncio.run(_query_similar_syndromes(info))
+
+        assert results
+        assert results[0]["source"] == "med_tcm_diagnostic_axis"
+        assert any(
+            item.get("canonical_name") == "心脾两虚"
+            for item in results
+        )
+        heart_spleen = next(
+            item for item in results if item.get("canonical_name") == "心脾两虚"
+        )
+        assert heart_spleen["diagnostic_axis"]["tongue"]
+        assert heart_spleen["diagnostic_axis"]["pulse"]
+        assert "气虚体质" in heart_spleen["constitutions"]
 
     def test_strategy_a_hpoa_disease_via_mmsymptom(self, neo4j_graph):
         """策略 A：MMSymptom → HPOA Disease 桥接"""

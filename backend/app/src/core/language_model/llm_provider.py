@@ -233,6 +233,14 @@ def get_langchain_llm(
     elif provider_key in ("anthropic", "claude"):
         # Anthropic Claude: 使用 thinking 参数（Claude 3.7+）
         llm_kwargs["anthropic_api_key"] = api_key
+        if base_url:
+            llm_kwargs["base_url"] = base_url
+            # LongCat 等 Anthropic 兼容网关使用 Bearer 认证，
+            # 原生 Anthropic SDK 默认只发送 x-api-key。
+            if "api.anthropic.com" not in base_url:
+                llm_kwargs["default_headers"] = {
+                    "Authorization": f"Bearer {api_key}",
+                }
         if enable_thinking:
             # Claude extended thinking mode
             llm_kwargs["thinking"] = {"type": "enabled"}
@@ -277,13 +285,12 @@ def get_langchain_llm(
             llm_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
             
     elif provider_key in ("qwen", "dashscope", "tongyi", "alibaba", "aliyun"):
-        # 通义千问: 使用 extra_body 传递 enable_thinking
+        # 通义千问部分新模型默认会输出长 reasoning_content；显式传递开关，
+        # 避免关闭思考时正文为空或因推理耗尽 max_tokens。
         llm_kwargs["api_key"] = api_key
         if base_url:
             llm_kwargs["base_url"] = base_url
-        if enable_thinking:
-            # Qwen/DashScope thinking mode
-            llm_kwargs["extra_body"] = {"enable_thinking": True}
+        llm_kwargs["extra_body"] = {"enable_thinking": bool(enable_thinking)}
     
     elif provider_key in ("zhipu", "glm", "chatglm"):
         # 智谱 GLM: 使用自定义包装器支持 thinking mode

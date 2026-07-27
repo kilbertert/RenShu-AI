@@ -15,6 +15,7 @@ export interface ChatRequest {
     model_configuration: ModelConfiguration;
     stream?: boolean;
     enable_thinking?: boolean;  // 是否启用思考过程展示
+    attachments?: Array<{ id: string }>;
 }
 
 export interface PersonaAnalysisRequest {
@@ -30,4 +31,5 @@ export interface ChatResumeRequest {
     thread_id: string;
     query: string;
     model_configuration: ModelConfiguration;
+    attachments?: Array<{ id: string }>;
 }

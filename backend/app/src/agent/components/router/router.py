@@ -50,6 +50,68 @@ async def analyze_and_route_query(state: TCMAgentState) -> dict:
     # 创建意图分类器和路由器
     from ...intent_recognition.router.intent_router import IntentRouter
 
+    # 纯附件消息在视觉分析失败时必须走明确的图片失败提示，不能再依赖
+    # 文本意图分类进入诊断追问，从而让用户误以为图片已经被模型观察。
+    has_image = bool(state.attachments)
+    attachment_kinds = {
+        str(getattr(getattr(item, "kind", None), "value", getattr(item, "kind", "")))
+        if not isinstance(item, dict)
+        else str(getattr(item.get("kind"), "value", item.get("kind") or ""))
+        for item in state.attachments
+    }
+    has_report_attachment = "medical_report" in attachment_kinds
+    is_attachment_only_prompt = last_user_query.strip() in {
+        "请结合我上传的舌像进行中医问诊分析。",
+        "我已上传舌像，请结合舌像继续问诊。",
+    }
+    if has_image and not state.tongue_analysis and is_attachment_only_prompt:
+        return {
+            "router": TCMRouter(
+                query_type="tcm-image",
+                reasoning="纯舌像消息未产生真实视觉分析结果",
+                confidence=1.0,
+                extracted_entities={},
+                has_image=True,
+            ),
+            "steps": ["路由分析完成: tcm-image"],
+        }
+
+    is_report_only_prompt = last_user_query.strip() in {
+        "请解读我上传的医疗报告，并结合可核验结果进行中医问诊。",
+        "我已上传医疗报告，请结合报告继续问诊。",
+    }
+    is_report_request = is_report_only_prompt or any(
+        keyword in last_user_query
+        for keyword in ("报告", "化验单", "检验单", "检查单", "体检单")
+    )
+    if (
+        has_report_attachment
+        and not state.report_analysis
+        and is_report_request
+    ):
+        return {
+            "router": TCMRouter(
+                query_type="tcm-image",
+                reasoning="纯医疗报告消息未产生真实解析结果",
+                confidence=1.0,
+                extracted_entities={},
+                has_image=True,
+            ),
+            "steps": ["路由分析完成: tcm-image"],
+        }
+
+    if state.report_analysis:
+        return {
+            "router": TCMRouter(
+                query_type="tcm-diagnose",
+                reasoning="已完成医疗报告结构化解析，进入问诊结合流程",
+                confidence=1.0,
+                extracted_entities={},
+                has_image=has_image,
+            ),
+            "steps": ["路由分析完成: tcm-diagnose"],
+        }
+
     intent_classifier = _create_intent_classifier(state.llm_config)
 
     router = IntentRouter(intent_classifier=intent_classifier)
@@ -59,7 +121,7 @@ async def analyze_and_route_query(state: TCMAgentState) -> dict:
             query=last_user_query,
             user_id=state.user_id or "default_user",
             conversation_id=state.conversation_id,
-            has_image=state.router.has_image if state.router else False,
+            has_image=has_image,
         )
 
         # OOS/闲聊 -> tcm-chat
@@ -93,7 +155,7 @@ async def analyze_and_route_query(state: TCMAgentState) -> dict:
 
             # 舌诊需要图片
             if cls.primary_intent.value == "diagnosis" and cls.sub_type == "tongue":
-                query_type = "tcm-image"
+                query_type = "tcm-diagnose" if state.tongue_analysis else "tcm-image"
 
         return {
             "router": TCMRouter(
@@ -102,6 +164,7 @@ async def analyze_and_route_query(state: TCMAgentState) -> dict:
                 reasoning=f"路径: {' -> '.join(route_result.route_path)}",
                 confidence=route_result.classification.confidence if route_result.classification else 0.5,
                 extracted_entities=extracted_entities,
+                has_image=has_image,
             ),
             "steps": [f"路由分析完成: {query_type}"],
         }
@@ -109,12 +172,12 @@ async def analyze_and_route_query(state: TCMAgentState) -> dict:
     except Exception as e:
         logger.error(f"路由分析失败: {e}", exc_info=True)
         return {
-            "error": f"Router failed: {str(e)}",
             "router": TCMRouter(
                 query_type="tcm-chat",
                 reasoning="降级到General",
                 confidence=0.5
             ),
+            "steps": ["路由分析失败：已降级到通用问答"],
         }
 
 
@@ -188,6 +251,7 @@ def route_query(state: TCMAgentState) -> str:
         "tcm-diagnose": "handle_diagnose_query",
         "tcm-herb": "handle_herb_query",
         "tcm-prescription": "handle_prescription_query",
+        "tcm-image": "handle_image_query",
     }
 
     return route_map.get(query_type, "respond_to_general_query")

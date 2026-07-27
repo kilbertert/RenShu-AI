@@ -13,6 +13,7 @@
 - anthropic, google, grok, xai
 """
 
+import os
 import sys
 import asyncio
 from pathlib import Path
@@ -26,8 +27,8 @@ from app.src.core.language_model.llm_provider import get_langchain_llm, get_supp
 from langchain_core.messages import HumanMessage
 
 # 统一的 API 配置
-API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-BASE_URL = "https://www.dmxapi.cn/v1"
+API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 # 测试配置 - 使用统一的 API Key 和 Base URL
 PROVIDER_CONFIGS = {

@@ -16,10 +16,13 @@ L3层：使用大模型进行深度意图分类和实体提取
     result = await classifier.classify(query)
 """
 
-from typing import Optional
+import json
+from typing import Any, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.language_models.chat_models import BaseChatModel
+
+from app.src.utils import get_logger
 
 from .schemas import (
     IntentType,
@@ -29,6 +32,32 @@ from .schemas import (
     WellnessLevel,
     EnrichedContext,
 )
+
+
+logger = get_logger("intent_classifier")
+
+
+def _content_to_text(content: Any) -> str:
+    """兼容普通字符串与 Anthropic 内容块。"""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        str(block.get("text", ""))
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _parse_json_classification(content: Any) -> IntentClassification:
+    """从纯 JSON 或 Markdown JSON 代码块中恢复意图分类。"""
+    text = _content_to_text(content).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("模型响应中没有 JSON 对象")
+    return IntentClassification.model_validate(json.loads(text[start : end + 1]))
 
 
 # LLM意图分类系统提示词
@@ -209,32 +238,51 @@ class IntentClassifier:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt),
             ])
-
-            # 标记路由来源
-            result.route_source = "llm"
-            result.has_image = has_image
-
-            # 如果有图片且意图不明确，倾向于舌诊分析（diagnosis.tongue）
-            if has_image and result.confidence < 0.8:
-                result.primary_intent = IntentType.DIAGNOSIS
-                result.sub_type = "tongue"
-                result.requires_image = True
-                result.confidence = 0.85
-
-            return result
-
-        except Exception as e:
-            # 降级处理 - 默认归为养生类L2（更谨慎）
-            return IntentClassification(
-                primary_intent=IntentType.WELLNESS,
-                sub_type="complex",
-                confidence=0.3,
-                wellness_level=WellnessLevel.L2,
-                reasoning=f"分类失败，降级处理: {str(e)}",
-                route_source="llm",
-                sentiment=SentimentAnalysis(),
-                entities=ExtractedEntities(),
+            if result is None:
+                raise ValueError("结构化意图分类返回空结果")
+            if not isinstance(result, IntentClassification):
+                result = IntentClassification.model_validate(result)
+        except Exception as structured_error:
+            logger.warning(
+                "结构化意图分类失败，尝试解析普通 JSON 响应: %s",
+                structured_error,
             )
+            try:
+                raw_result = await self.llm.ainvoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ])
+                result = _parse_json_classification(raw_result.content)
+            except Exception as fallback_error:
+                logger.warning("普通 JSON 意图分类也失败: %s", fallback_error)
+                # 最终降级：保持低置信度，由上层要求用户澄清。
+                return IntentClassification(
+                    primary_intent=IntentType.WELLNESS,
+                    sub_type="complex",
+                    confidence=0.3,
+                    wellness_level=WellnessLevel.L2,
+                    reasoning=(
+                        "分类失败，降级处理: "
+                        f"{type(structured_error).__name__} / "
+                        f"{type(fallback_error).__name__}"
+                    ),
+                    route_source="llm",
+                    sentiment=SentimentAnalysis(),
+                    entities=ExtractedEntities(),
+                )
+
+        # 标记路由来源
+        result.route_source = "llm"
+        result.has_image = has_image
+
+        # 如果有图片且意图不明确，倾向于舌诊分析（diagnosis.tongue）
+        if has_image and result.confidence < 0.8:
+            result.primary_intent = IntentType.DIAGNOSIS
+            result.sub_type = "tongue"
+            result.requires_image = True
+            result.confidence = 0.85
+
+        return result
 
     async def classify_with_fallback(
         self,
@@ -266,6 +314,18 @@ class IntentClassifier:
 
         # 如果规则层有结果但置信度不够高，比较两者
         if rule_result:
+            # 模型鉴权、网关或结构化输出失败时，已有规则结果优先于低置信度
+            # 的通用 wellness 占位，避免把药材/方剂/症状咨询误判为 OOS。
+            if (
+                llm_result.confidence < 0.5
+                and str(llm_result.reasoning or "").startswith("分类失败")
+            ):
+                rule_result.confidence = max(rule_result.confidence, 0.85)
+                rule_result.reasoning = (
+                    f"{rule_result.reasoning}；LLM 分类不可用，采用确定性规则降级"
+                )
+                return rule_result
+
             # 规则层实体提取通常更准确，合并实体
             merged_entities = self._merge_entities(
                 rule_result.entities,
@@ -339,4 +399,3 @@ def create_intent_classifier(
     )
 
     return IntentClassifier(llm=llm)
-

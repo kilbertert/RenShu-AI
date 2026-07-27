@@ -642,7 +642,7 @@ def with_mcp_tools(toolkit: MCPToolkit):
             if hasattr(state, "__setitem__"):
                 state["mcp_toolkit"] = toolkit
                 state["mcp_tools"] = {
-                    name: lambda **kwargs, n=name: toolkit.call_tool(n, **kwargs)
+                    name: lambda n=name, **kwargs: toolkit.call_tool(n, **kwargs)
                     for name in toolkit.tool_names
                 }
 

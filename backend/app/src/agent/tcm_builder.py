@@ -144,35 +144,20 @@ def _check_model_supports_tool_call(provider_name: str, model_name: str) -> bool
     Returns:
         bool: 是否支持 tool_call
     """
-    try:
-        from app.src.service.language_model_service import LanguageModelService
-        from app.src.database.database import get_async_session
-        
-        # 这里需要同步查询，但 get_async_session 是异步的
-        # 为了简化，我们使用一个简单的映射表
-        # 实际生产环境中，应该从数据库查询
-        
-        # 已知支持 tool_call 的模型（可以扩展）
-        tool_call_models = {
-            "openai": ["gpt-4", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
-            "anthropic": ["claude-3", "claude-3.5"],
-            "google": ["gemini"],
-            "qwen": ["qwen-max", "qwen-plus"],
-        }
-        
-        provider_key = provider_name.lower()
-        if provider_key in tool_call_models:
-            # 检查模型名称是否匹配
-            for supported_model in tool_call_models[provider_key]:
-                if supported_model in model_name.lower():
-                    return True
-        
-        return False
-    except Exception as e:
-        from app.src.utils import get_logger
-        logger = get_logger("tcm_builder")
-        logger.warning(f"Failed to check tool_call support: {e}")
-        return False
+    # 当前调用链没有同步数据库会话，避免导入不存在的旧 database 模块。
+    # 模型能力以已验收的白名单保守开启；未验证模型默认关闭工具调用。
+    tool_call_models = {
+        "openai": ["gpt-4", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+        "anthropic": ["claude-3", "claude-3.5"],
+        "google": ["gemini"],
+        "qwen": ["qwen-max", "qwen-plus"],
+    }
+    provider_key = str(provider_name or "").lower()
+    normalized_model = str(model_name or "").lower()
+    return any(
+        supported_model in normalized_model
+        for supported_model in tool_call_models.get(provider_key, [])
+    )
 
 
 # ============== 节点导入 ==============
@@ -182,6 +167,7 @@ from .components.general.handlers import respond_to_general_query
 from .components.wellness.handlers import call_wellness_subgraph
 from .components.herb.handlers import handle_herb_query
 from .components.prescription.handlers import handle_prescription_query
+from .components.image.handlers import handle_image_query
 from .components.diagnose.handlers import handle_diagnose_query
 
 # ============== 节点函数 ==============
@@ -419,6 +405,9 @@ def build_tcm_graph():
     # 方剂询问节点
     graph.add_node("handle_prescription_query", handle_prescription_query)
 
+    # 图像意图节点（未携带图像时给出明确提示，不静默降级）
+    graph.add_node("handle_image_query", handle_image_query)
+
     # 注释掉总结 agent 节点（2026-02-05）
     # graph.add_node("generate_final_response", generate_final_response)
 
@@ -448,6 +437,7 @@ def build_tcm_graph():
             "handle_diagnose_query": "handle_diagnose_query",
             "handle_herb_query": "handle_herb_query",
             "handle_prescription_query": "handle_prescription_query",
+            "handle_image_query": "handle_image_query",
             # 直接进入后置中间件（跳过总结 agent）
             "middleware_after": "middleware_after",
         }
@@ -459,6 +449,7 @@ def build_tcm_graph():
     graph.add_edge("handle_diagnose_query", "middleware_after")
     graph.add_edge("handle_herb_query", "middleware_after")
     graph.add_edge("handle_prescription_query", "middleware_after")
+    graph.add_edge("handle_image_query", "middleware_after")
 
     # 5. 中间件后置 → 结束
     graph.add_edge("middleware_after", END)

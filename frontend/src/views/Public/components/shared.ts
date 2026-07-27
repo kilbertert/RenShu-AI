@@ -3,7 +3,7 @@ import type { ChatMessage, UserPersona, BaseProfile } from '../../../types';
 export interface Attachment {
   file: File;
   previewUrl: string;
-  base64: string;
+  kind: 'tongue_image' | 'medical_report';
 }
 
 export interface ChatSession {

@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 class TongueAnalysisRequest(BaseModel):
     """舌诊分析请求"""
     image_url: str = Field(
+        min_length=1,
+        max_length=12 * 1024 * 1024,
         description="图片URL或base64编码的图片数据"
     )
     additional_info: Optional[str] = Field(

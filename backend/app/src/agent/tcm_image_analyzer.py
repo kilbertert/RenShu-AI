@@ -7,19 +7,31 @@ TCM Tongue Image Analyzer
 
 import os
 import base64
+import asyncio
+from pathlib import Path
 from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from app.src.core.language_model.structured_output import (
+    invoke_structured_with_json_fallback,
+    parse_json_model,
+)
+from app.src.schema.attachment_schema import TongueAnalysisPayload
 
-from .tcm_states import TongueAnalysisResult
+from .tcm_states import LLMConfig
 
 
 # 舌诊分析系统提示词
 TONGUE_ANALYSIS_SYSTEM_PROMPT = """你是一位经验丰富的中医舌诊专家。请根据用户提供的舌象图片进行专业分析。
 
-分析要点：
+第一步必须先判断图片是否为有效舌像：
+- 画面中应有清晰、占主要区域的人体舌部，可观察舌质和舌苔。
+- 风景、宠物、食物、口腔外观但未伸舌、纯色图、模糊遮挡图都不是有效舌像。
+- 非舌像时 is_tongue_image=false，填写 rejection_reason，舌色/舌形/苔色/苔质必须留空，
+  syndrome_hints 必须为空，confidence 不得高于 0.2；禁止猜测或编造舌象。
+
+有效舌像的分析要点：
 1. 舌色：观察舌质颜色（淡红、红、绛红、紫暗、淡白等）
 2. 舌形：观察舌体形态（胖大、瘦薄、齿痕、裂纹、芒刺等）
 3. 苔色：观察舌苔颜色（白、黄、灰、黑等）
@@ -29,12 +41,16 @@ TONGUE_ANALYSIS_SYSTEM_PROMPT = """你是一位经验丰富的中医舌诊专家
 请根据以上观察，给出：
 - 详细的舌象描述
 - 可能的证型提示
-- 养生建议
+- 图片质量判断和置信度
 
 注意：
 - 分析应客观准确，基于图像实际情况
 - 证型提示仅供参考，不作为诊断依据
 - 如图片质量不佳，请说明并给出建议
+
+只返回符合以下字段的 JSON：
+is_tongue_image、rejection_reason、tongue_color、tongue_shape、coating_color、coating_quality、analysis、
+syndrome_hints、confidence、image_quality。
 """
 
 
@@ -107,8 +123,9 @@ class TongueAnalyzer:
     async def analyze_tongue_image(
         self,
         image_url: str,
-        additional_info: str = None
-    ) -> TongueAnalysisResult:
+        additional_info: str = None,
+        llm_config: LLMConfig | None = None,
+    ) -> TongueAnalysisPayload:
         """
         分析舌诊图像
 
@@ -119,33 +136,37 @@ class TongueAnalyzer:
         Returns:
             TongueAnalysisResult: 结构化的舌诊分析结果
         """
-        llm = self._get_llm()
+        if llm_config is not None:
+            from app.src.agent.tcm_builder import get_llm
+
+            llm = get_llm(llm_config=llm_config, temperature=0.1, max_tokens=1200)
+        else:
+            llm = self._get_llm()
 
         # 构建多模态消息
         user_content = []
 
-        # 添加图片
-        if image_url.startswith("data:"):
-            # base64格式
+        data_url = image_url if image_url.startswith("data:") else f"data:image/jpeg;base64,{image_url}"
+        provider_name = (llm_config.provider_name.lower() if llm_config else "")
+        if provider_name in {"anthropic", "claude"}:
+            header, encoded = data_url.split(",", 1)
+            media_type = header.split(";")[0].split(":", 1)[1]
             user_content.append({
-                "type": "image_url",
-                "image_url": {"url": image_url}
-            })
-        elif image_url.startswith("http"):
-            # URL格式
-            user_content.append({
-                "type": "image_url",
-                "image_url": {"url": image_url}
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": encoded,
+                },
             })
         else:
-            # 假设是纯base64字符串
             user_content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{image_url}"}
+                "image_url": {"url": data_url}
             })
 
         # 添加文本提示
-        prompt_text = "请分析这张舌象图片。"
+        prompt_text = "请先判断这是否为有效舌像；只有确认有效后才分析舌质和舌苔。"
         if additional_info:
             prompt_text += f"\n\n用户补充信息：{additional_info}"
 
@@ -154,35 +175,47 @@ class TongueAnalyzer:
             "text": prompt_text
         })
 
-        # 使用结构化输出
-        llm_with_structure = llm.with_structured_output(TongueAnalysisResult)
+        messages = [
+            SystemMessage(content=TONGUE_ANALYSIS_SYSTEM_PROMPT),
+            HumanMessage(content=user_content),
+        ]
 
         try:
-            result = await llm_with_structure.ainvoke([
-                SystemMessage(content=TONGUE_ANALYSIS_SYSTEM_PROMPT),
-                HumanMessage(content=user_content),
-            ])
+            if provider_name in {"qwen", "dashscope", "tongyi", "alibaba", "aliyun"}:
+                response = await llm.bind(
+                    extra_body={"enable_thinking": False},
+                    response_format={"type": "json_object"},
+                ).ainvoke(messages)
+                return parse_json_model(response.content, TongueAnalysisPayload)
+            result = await invoke_structured_with_json_fallback(
+                llm,
+                TongueAnalysisPayload,
+                messages,
+            )
             return result
         except Exception as e:
-            # 如果结构化输出失败，尝试普通调用后解析
-            try:
-                response = await llm.ainvoke([
-                    SystemMessage(content=TONGUE_ANALYSIS_SYSTEM_PROMPT),
-                    HumanMessage(content=user_content),
-                ])
-                return self._parse_response_to_result(response.content)
-            except Exception as inner_e:
-                # 返回错误结果
-                return TongueAnalysisResult(
-                    tongue_color="无法识别",
-                    tongue_shape="无法识别",
-                    coating_color="无法识别",
-                    coating_texture="无法识别",
-                    analysis=f"图像分析失败：{str(e)}。请确保图片清晰，光线充足。",
-                    syndrome_hints=[]
-                )
+            raise RuntimeError(f"舌像结构化分析失败: {e}") from e
 
-    def _parse_response_to_result(self, content: str) -> TongueAnalysisResult:
+    async def analyze_file(
+        self,
+        path: Path,
+        mime_type: str,
+        *,
+        llm_config: LLMConfig,
+        additional_info: str | None = None,
+        attachment_id=None,
+    ) -> TongueAnalysisPayload:
+        data = await asyncio.to_thread(path.read_bytes)
+        data_url = f"data:{mime_type};base64,{base64.b64encode(data).decode('ascii')}"
+        result = await self.analyze_tongue_image(
+            data_url,
+            additional_info=additional_info,
+            llm_config=llm_config,
+        )
+        result.source_attachment_id = attachment_id
+        return result
+
+    def _parse_response_to_result(self, content: str) -> TongueAnalysisPayload:
         """
         解析LLM响应为结构化结果
 
@@ -193,11 +226,11 @@ class TongueAnalyzer:
             TongueAnalysisResult: 解析后的结果
         """
         # 简单解析，提取关键信息
-        result = TongueAnalysisResult(
+        result = TongueAnalysisPayload(
             tongue_color="",
             tongue_shape="",
             coating_color="",
-            coating_texture="",
+            coating_quality="",
             analysis=content,
             syndrome_hints=[]
         )
@@ -220,7 +253,7 @@ class TongueAnalyzer:
         coating_textures = ["薄苔", "厚苔", "腻苔", "燥苔", "滑苔", "薄", "厚", "腻", "燥", "滑"]
         for keyword in coating_textures:
             if keyword in content:
-                result.coating_texture = keyword.replace("苔", "")
+                result.coating_quality = keyword.replace("苔", "")
                 break
 
         # 尝试提取证型提示

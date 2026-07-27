@@ -5,20 +5,20 @@ import { useAuth } from '../contexts/AuthContext';
 import ProtectedRoute from './ProtectedRoute';
 
 // 首屏必需页面：静态导入，避免首屏 loading 闪烁
-import LandingPage from '../views/home/LandingPage';
-import PublicLoginPage from '../views/public/PublicLoginPage';
-import ProfessionalLoginPage from '../views/professional/ProfessionalLoginPage';
-import PublicRegisterPage from '../views/public/PublicRegisterPage';
-import ProfessionalRegisterPage from '../views/professional/ProfessionalRegisterPage';
+import LandingPage from '../views/Home/LandingPage';
+import PublicLoginPage from '../views/Public/PublicLoginPage';
+import ProfessionalLoginPage from '../views/Professional/ProfessionalLoginPage';
+import PublicRegisterPage from '../views/Public/PublicRegisterPage';
+import ProfessionalRegisterPage from '../views/Professional/ProfessionalRegisterPage';
 import AdminLoginPage from '../views/admin/AdminLoginPage';
 import AdminRegisterPage from '../views/admin/AdminRegisterPage';
 
 // Portal 页面：eager 导入以避开 React 18.3.1 + Vite react-refresh 在
 // lazy 边界 + useLayoutEffect 直写 documentElement 场景下的 removeChild bug
 import PublicPortal from '../views/Public/PublicPortal';
-import ProfessionalPortal from '../views/professional/ProfessionalPortal';
+import ProfessionalPortal from '../views/Professional/ProfessionalPortal';
 import AdminPortal from '../views/admin/AdminPortal';
-import PublicModelManagementPage from '../views/public/PublicModelManagementPage';
+import PublicModelManagementPage from '../views/Public/PublicModelManagementPage';
 
 // 路由切换 loading 占位（与品牌色协调）
 const RouteLoading: React.FC = () => (

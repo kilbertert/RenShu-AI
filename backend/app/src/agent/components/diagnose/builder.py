@@ -15,7 +15,34 @@ from .nodes import (
     simple_diagnosis,
     moderate_diagnosis,
 )
-from .nodes.complex import complex_diagnosis
+
+
+async def complex_diagnosis(state, config):
+    """复杂病例的安全降级路径。
+
+    DeepSearch 的向量、古籍和网页工具尚未完成真实数据接入，因此复杂病例明确
+    复用 moderate 的可审计 Neo4j GraphRAG，不调用任何 mock 工具。
+    """
+    result = await moderate_diagnosis(state, config)
+    diagnosis_payload = result.get("diagnosis_result")
+    if isinstance(diagnosis_payload, dict):
+        from .models import CollectedDiagnoseInfo, DiagnosisResult
+        from .structured_diagnosis import apply_clinical_safety_bounds
+
+        diagnosis = DiagnosisResult.model_validate(diagnosis_payload)
+        collected_info = CollectedDiagnoseInfo(**(state.get("collected_info") or {}))
+        apply_clinical_safety_bounds(
+            diagnosis,
+            collected_info,
+            complexity_level="complex",
+            report_analysis=state.get("report_analysis"),
+        )
+        result["diagnosis_result"] = diagnosis.model_dump()
+        result["answer"] = diagnosis.to_display()
+    result["steps"] = [
+        "复杂辨证: 使用可审计 GraphRAG 安全路径；多专家 DeepSearch 尚未启用"
+    ] + result.get("steps", [])
+    return result
 
 
 def create_diagnose_graph():
@@ -106,12 +133,8 @@ def create_diagnose_graph():
         }
     )
 
-    # 5. 各辨证节点 → 结束
-    workflow.add_edge("simple_diagnosis", END)
-    workflow.add_edge("moderate_diagnosis", END)
-    workflow.add_edge("complex_diagnosis", END)  # DeepSearch Agent
-
-    # P2: 诊断完成后落库病例（fire-and-forget，不影响 END）
+    # 5. 各辨证节点 → 病例落库 → 结束
+    # 落库节点内部吞掉异常，不会阻断诊断结果返回。
     from .nodes.save_case import save_case_node  # noqa: E402
     workflow.add_node("save_case", save_case_node)
     workflow.add_edge("simple_diagnosis", "save_case")

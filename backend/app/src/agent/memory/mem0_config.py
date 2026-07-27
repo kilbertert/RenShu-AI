@@ -67,7 +67,7 @@ class Mem0Config(BaseModel):
             config.graph_store_config = {
                 "url": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
                 "username": os.getenv("NEO4J_USER", "neo4j"),
-                "password": os.getenv("NEO4J_PASSWORD", "tcm_graph_2026")
+                "password": os.getenv("NEO4J_PASSWORD", "")
             }
 
         return config

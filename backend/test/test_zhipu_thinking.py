@@ -20,8 +20,8 @@ except ImportError:
     sys.exit(1)
 
 # 直接使用提供的 API Key 和 Base URL
-ZHIPU_API_KEY = "sk-Tz0aHC6HJoHHfKHeFHY2VICuawHRP1QteP0Hy1j0pAbOOFLn"
-ZHIPU_BASE_URL = "https://www.dmxapi.cn/v1"
+ZHIPU_API_KEY = os.getenv("TEST_LLM_API_KEY", "")
+ZHIPU_BASE_URL = os.getenv("TEST_LLM_BASE_URL", "")
 
 print(f"智谱 GLM API Key: {ZHIPU_API_KEY[:10]}...")
 print(f"智谱 GLM Base URL: {ZHIPU_BASE_URL}")
