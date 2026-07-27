@@ -5,8 +5,9 @@ const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
 // 根据环境选择 API 基础 URL。
 // - Vite 开发服务器使用同源 /api，并由 vite.config.ts 代理到本机后端。
-// - 生产环境优先使用显式 VITE_API_BASE_URL；未配置时使用当前页面主机的 8094。
-// 这样从其他电脑访问前端时，不会把 localhost 错误解析成访问者自己的电脑。
+// - 生产环境优先使用显式 VITE_API_BASE_URL；未配置时使用同源 /api。
+//   正式前端由 Vite preview 将 /api 代理到本机后端，避免要求浏览器直连 8094。
+// - 只有在独立部署前后端时，才需要填写完整的 VITE_API_BASE_URL。
 const getBaseURL = (): string => {
   const configured = String(import.meta.env.VITE_API_BASE_URL || '').trim();
   if (configured) {
@@ -18,12 +19,7 @@ const getBaseURL = (): string => {
   if (import.meta.env.DEV) {
     return '';
   }
-  if (typeof window !== 'undefined') {
-    const apiURL = new URL(window.location.origin);
-    apiURL.port = String(import.meta.env.VITE_API_PORT || '8094');
-    return apiURL.origin;
-  }
-  return 'http://127.0.0.1:8094';
+  return '';
 };
 
 // Token 刷新状态管理

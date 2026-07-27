@@ -9,6 +9,7 @@
 - 后端依赖已安装在 `backend/.venv`
 - 前端已执行 `npm ci` 和 `npm run build`
 - `8091` 由其他系统使用；RenShu 后端使用 `8094`，前端使用 `3002`
+- 生产前端默认通过 `3002/api` 同源代理访问后端，浏览器不需要直连 `8094`
 - `.env` 中的 `JWT_SECRET_KEY`、`ENCRYPTION_KEY`、数据库密码和模型密钥必须使用部署环境自己的值；这些值不进入 Git
 - 轮换 `ENCRYPTION_KEY` 时必须先迁移 `user_provider_configs.api_key` 的 Fernet 密文，再重启后端
 

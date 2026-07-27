@@ -33,10 +33,10 @@ export const authApi = {
 
 export  const  adminAuthApi={
         register:(data:AdminRegisterRequest):Promise<ApiResponse<string>> =>{
-            return request.post('api/v1/admin/register',data)
+            return request.post('/api/v1/admin/register',data)
         },
         login:(data:AdminLoginRequest):Promise<ApiResponse<AuthResponse>> =>{
-            return request.post('api/v1/admin/login',data)
+            return request.post('/api/v1/admin/login',data)
 
         },
         me: (): Promise<ApiResponse<AdminResponse>> => {
