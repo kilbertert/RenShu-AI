@@ -249,7 +249,7 @@ def _format_grounded_herb_answer(
     herbs: list[HerbInfo],
     compatibility: HerbCompatibilityResult | None,
 ) -> str:
-    """只展示当前图谱真实字段；缺失字段必须明确标注，禁止自由补全。"""
+    """只展示已核验字段，同时把数据边界翻译成患者可理解的表达。"""
     forbid_dosage = bool(
         any(
             marker in query
@@ -267,34 +267,32 @@ def _format_grounded_herb_answer(
     )
     if not herbs:
         parts = [
-            "当前知识图谱未检索到对应药材资料，因此不能可靠提供性味、归经、功效、剂量或出处。"
+            "当前知识资料中没有查到对应药材，因此不能可靠提供性味、归经、功效、剂量或出处。"
         ]
     else:
         boundary = (
-            "本回答不补充未经当前图谱验证的信息。"
+            "以下仅整理已核验的基础资料，不补充未核验的信息。"
             if forbid_dosage
-            else "本回答不补充未经当前图谱验证的剂量或出处。"
+            else "以下仅整理已核验的基础资料；未记录的剂量和出处不会自行补全。"
         )
         parts = [
-            "以下内容仅来自当前 Neo4j 知识图谱；未显示的字段表示图谱未提供，"
-            + boundary
+            "下面是知识资料中可核验到的基础信息。\n" + boundary
         ]
         for herb in herbs[:3]:
             lines = [f"### {herb.name}"]
-            lines.append(f"- 图谱来源：{'、'.join(herb.sources) if herb.sources else '未提供'}")
             nature_flavor = "、".join(_display_tcm_terms([herb.nature, *herb.flavor]))
             meridians = _display_tcm_terms(herb.meridians)
             effects = _display_grounded_text(herb.effects, field="effects")
             indications = _display_grounded_text(herb.indications, field="indications")
-            lines.append(f"- 性味：{nature_flavor or '未提供'}")
-            lines.append(f"- 归经：{'、'.join(meridians) if meridians else '未提供'}")
-            lines.append(f"- 功效：{'；'.join(effects) if effects else '未提供'}")
-            lines.append(f"- 主治/适应信息：{'；'.join(indications) if indications else '未提供'}")
+            lines.append(f"- 性味：{nature_flavor or '当前资料未提供'}")
+            lines.append(f"- 归经：{'、'.join(meridians) if meridians else '当前资料未提供'}")
+            lines.append(f"- 主要功效：{'；'.join(effects) if effects else '当前资料未提供'}")
+            lines.append(f"- 常见应用：{'；'.join(indications) if indications else '当前资料未提供'}")
             lines.append(
-                f"- 禁忌：{'；'.join(herb.contraindications) if herb.contraindications else '图谱未提供'}"
+                f"- 禁忌与注意：{'；'.join(herb.contraindications) if herb.contraindications else '当前资料未提供'}"
             )
             if not forbid_dosage:
-                lines.append(f"- 图谱用量：{herb.dosage or '未提供；不能据此形成个体化剂量建议'}")
+                lines.append(f"- 用量：{herb.dosage or '当前资料未提供；不能据此形成个体化剂量建议'}")
             parts.append("\n".join(lines))
 
     if compatibility:

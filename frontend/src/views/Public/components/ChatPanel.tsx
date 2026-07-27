@@ -160,17 +160,16 @@ const DiagnosisEvidenceCard: React.FC<{ diagnosis: Record<string, any> }> = ({ d
   return (
     <div className="mt-3 rounded-xl border border-emerald-300/40 bg-emerald-50/60 p-3 text-sm dark:border-emerald-700/40 dark:bg-emerald-950/20">
       <div className="mb-2 font-semibold text-emerald-800 dark:text-emerald-300">
-        结构化辨证与图谱证据
+        辨证结果与可核验依据
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-gray-700 dark:text-gray-300">
         <span>主证：{diagnosis.syndrome || '未明确'}</span>
         <span>置信度：{Math.round(Number(diagnosis.confidence || 0) * 100)}%</span>
-        {diagnosis.syndrome_id && <span>知识库 ID：{diagnosis.syndrome_id}</span>}
       </div>
       {citations.length > 0 && (
         <div className="mt-3 space-y-2">
           <div className="font-medium text-emerald-800 dark:text-emerald-300">
-            Neo4j 可追溯证据
+            可核验依据
           </div>
           {citations.slice(0, 4).map((citation: any, index: number) => (
             <div
@@ -178,29 +177,18 @@ const DiagnosisEvidenceCard: React.FC<{ diagnosis: Record<string, any> }> = ({ d
               className="rounded-lg border border-emerald-200/60 bg-white/60 px-3 py-2 text-xs text-gray-700 dark:border-emerald-800/60 dark:bg-gray-900/30 dark:text-gray-300"
             >
               <div className="font-medium text-gray-800 dark:text-gray-200">
-                {citation.title || `图谱证据 ${index + 1}`}
+                {citation.title || `依据 ${index + 1}`}
               </div>
               {citation.evidence && <div className="mt-1">{citation.evidence}</div>}
               <div className="mt-1 text-emerald-700 dark:text-emerald-300">
-                来源：{citation.source || '未知'}
-                {citation.symptom_role
-                  ? ` · ${GRAPH_ROLE_LABELS[citation.symptom_role] || citation.symptom_role}`
-                  : ''}
-                {citation.evidence_weight != null
-                  ? ` · 权重 ${Number(citation.evidence_weight).toFixed(1)}`
-                  : ''}
+                依据类型：{GRAPH_ROLE_LABELS[citation.symptom_role] || '症状关联'}
               </div>
-              {Array.isArray(citation.relationship_path) && citation.relationship_path.length > 0 && (
-                <div className="mt-1 break-all text-gray-500 dark:text-gray-400">
-                  路径：{citation.relationship_path.join(' ')}
-                </div>
-              )}
             </div>
           ))}
         </div>
       )}
       <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-        图谱证据用于辅助辨证，不代表临床确诊或处方依据。
+        以上依据仅用于辅助辨证，不代表临床确诊或处方依据。
       </div>
     </div>
   );

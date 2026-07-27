@@ -235,7 +235,7 @@ async def test_explicit_formula_name_does_not_mix_kampo_variant():
     assert [item.name for item in result["prescriptions"]] == ["四君子汤"]
     assert "干姜" not in result["answer"]
     assert "大枣" not in result["answer"]
-    assert "图谱未提供" in result["answer"]
+    assert "当前资料未提供" in result["answer"]
 
 
 def test_image_query_type_routes_to_explicit_handler():

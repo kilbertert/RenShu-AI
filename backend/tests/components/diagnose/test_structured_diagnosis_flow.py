@@ -447,6 +447,22 @@ def test_patient_answer_is_rendered_from_structured_fields_not_free_text():
     assert "恶寒、无汗、脉浮紧" in result.patient_answer
 
 
+def test_patient_answer_joins_treatment_principle_and_method_naturally():
+    result = DiagnosisResult(
+        syndrome="心脾两虚证",
+        treatment_principle="补益心脾，养血安神",
+        treatment_method="通过益气健脾、养心安神的方法改善气血生化",
+    )
+
+    apply_clinical_safety_bounds(
+        result,
+        CollectedDiagnoseInfo(chief_complaint="乏力、心悸、食欲差"),
+    )
+
+    assert "调理方向**：补益心脾，养血安神；通过益气健脾" in result.patient_answer
+    assert "养血安神、通过" not in result.patient_answer
+
+
 def test_complex_safe_degradation_caps_confidence_and_removes_formulas():
     result = DiagnosisResult(
         syndrome="阴阳两虚证",

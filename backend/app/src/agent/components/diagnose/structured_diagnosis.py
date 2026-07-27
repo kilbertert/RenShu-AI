@@ -362,14 +362,22 @@ def _build_deterministic_patient_answer(
     if basis_lines:
         parts.append("**辨证依据**：\n" + "\n".join(basis_lines))
 
-    treatment = "、".join(
-        item
-        for item in (
-            _clean_patient_fragment(result.treatment_principle or "", formula_names=formula_names),
-            _clean_patient_fragment(result.treatment_method or "", formula_names=formula_names),
-        )
-        if item
+    treatment_principle = _clean_patient_fragment(
+        result.treatment_principle or "",
+        formula_names=formula_names,
     )
+    treatment_method = _clean_patient_fragment(
+        result.treatment_method or "",
+        formula_names=formula_names,
+    )
+    if treatment_principle and treatment_method:
+        treatment = (
+            treatment_method
+            if treatment_principle in treatment_method
+            else f"{treatment_principle}；{treatment_method}"
+        )
+    else:
+        treatment = treatment_principle or treatment_method
     if treatment:
         parts.append(f"**调理方向**：{treatment}。")
 

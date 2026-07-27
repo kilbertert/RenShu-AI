@@ -139,16 +139,15 @@ async def handle_prescription_query(state: TCMAgentState) -> dict:
 def _format_grounded_prescription_answer(
     prescriptions: list[PrescriptionInfo],
 ) -> str:
-    """不使用模型补全缺失组成、剂量或出处。"""
+    """不使用模型补全缺失组成、剂量或出处，并转换为患者可读表达。"""
     if not prescriptions:
         return (
-            "当前知识图谱未检索到匹配方剂，无法可靠提供古籍出处、组成或剂量。"
+            "当前知识资料中没有查到匹配方剂，无法可靠提供古籍出处、组成或剂量。"
             "请核对方名；不要根据相似名称自行拼接处方。"
         )
 
     parts = [
-        "以下内容仅来自当前 Neo4j 知识图谱；缺失字段会明确标注，"
-        "不会根据常识自动补齐组成或剂量。"
+        "下面是知识资料中可核验到的方剂信息。缺失字段不会根据常识自行补全。"
     ]
     for item in prescriptions[:5]:
         composition = [
@@ -157,14 +156,14 @@ def _format_grounded_prescription_answer(
             if isinstance(entry, dict) and entry.get("herb")
         ]
         lines = [f"### {item.name}"]
-        lines.append(f"- 出处/来源：{item.source or '未提供'}")
-        lines.append(f"- 组成：{'、'.join(composition) if composition else '图谱未提供'}")
-        lines.append(f"- 功效：{item.effects or '图谱未提供'}")
-        lines.append(f"- 主治/适用信息：{item.indications or '图谱未提供'}")
-        lines.append(f"- 适用证型：{item.syndrome or '图谱未提供'}")
-        lines.append(f"- 用法：{item.usage or '图谱未提供；不提供个体化剂量'}")
+        lines.append(f"- 出处：{item.source or '当前资料未提供'}")
+        lines.append(f"- 组成：{'、'.join(composition) if composition else '当前资料未提供完整组成'}")
+        lines.append(f"- 主要功效：{item.effects or '当前资料未提供'}")
+        lines.append(f"- 常见应用：{item.indications or '当前资料未提供'}")
+        lines.append(f"- 适用证型：{item.syndrome or '当前资料未提供'}")
+        lines.append(f"- 用法：{item.usage or '当前资料未提供；不提供个体化剂量'}")
         lines.append(
-            f"- 注意事项：{'；'.join(item.cautions) if item.cautions else '图谱未提供'}"
+            f"- 注意事项：{'；'.join(item.cautions) if item.cautions else '当前资料未提供'}"
         )
         parts.append("\n".join(lines))
     parts.append("方剂应用必须建立在明确辨证基础上，实际组成、剂量和加减请由中医师面诊确定。")
