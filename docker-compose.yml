@@ -6,7 +6,9 @@ services:
     image: postgres:16-alpine
     container_name: tcm-postgres
     ports:
-      - "5434:5432"
+      # Loopback-only: this host is the development plane and must not publish
+      # data-plane ports to the internet (SERVER-DEVELOPMENT-CONSENSUS, Host Fleet).
+      - "127.0.0.1:5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
@@ -29,15 +31,18 @@ services:
     image: redis:7-alpine
     container_name: tcm-redis
     ports:
-      - "6390:6379"
+      # Loopback-only (see postgres note above).
+      - "127.0.0.1:6390:6379"
     volumes:
       - redis_data:/data
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD before starting redis}"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD before starting redis}
     networks:
       - tcm_network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -49,8 +54,9 @@ services:
     image: qdrant/qdrant:latest
     container_name: tcm-qdrant
     ports:
-      - "6335:6333"
-      - "6336:6334"
+      # Loopback-only (see postgres note above).
+      - "127.0.0.1:6335:6333"
+      - "127.0.0.1:6336:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -67,8 +73,9 @@ services:
     image: neo4j:5.26.4
     container_name: tcm-neo4j
     ports:
-      - "7474:7474"  # HTTP
-      - "7687:7687"  # Bolt
+      # Loopback-only (see postgres note above).
+      - "127.0.0.1:7474:7474"  # HTTP
+      - "127.0.0.1:7687:7687"  # Bolt
     volumes:
       - neo4j_data:/data
       - neo4j_plugins:/plugins
