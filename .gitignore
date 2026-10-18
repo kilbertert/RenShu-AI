@@ -49,3 +49,4 @@ backend/graphrag/data/output/
 .DS_Store
 Thumbs.db
 Desktop.ini
+docker-compose.override.yml
